@@ -20,6 +20,28 @@ DEFAULT_DEST="$HOME/Pictures/PhotosBackup"
 if [ -n "${PHOTOS_LOCAL_DEST:-}" ]; then
   LOCAL_DEST="$PHOTOS_LOCAL_DEST"
   echo "   Using PHOTOS_LOCAL_DEST=$LOCAL_DEST"
+elif [ "$(uname -s)" = "Darwin" ] && command -v osascript >/dev/null 2>&1 && [ -t 0 ]; then
+  DEFAULT_LOCATION="$HOME/Pictures"
+  [ -d "$DEFAULT_LOCATION" ] || DEFAULT_LOCATION="$HOME"
+  echo "   Opening a Finder window -- choose (or create) the destination folder..."
+  PICKED="$(osascript <<OSA 2>/dev/null || true
+try
+  set chosenFolder to choose folder with prompt "Choose destination folder for Photos backup" default location (POSIX file "$DEFAULT_LOCATION")
+  return POSIX path of chosenFolder
+on error number -128
+  return ""
+end try
+OSA
+)"
+  PICKED="${PICKED%/}"
+  if [ -n "$PICKED" ]; then
+    LOCAL_DEST="$PICKED"
+    echo "   Selected: $LOCAL_DEST"
+  else
+    echo "   No folder selected; falling back to typed entry."
+    read -r -p "   Destination folder on this Mac [$DEFAULT_DEST]: " LOCAL_DEST
+    LOCAL_DEST="${LOCAL_DEST:-$DEFAULT_DEST}"
+  fi
 elif [ -t 0 ]; then
   read -r -p "   Destination folder on this Mac [$DEFAULT_DEST]: " LOCAL_DEST
   LOCAL_DEST="${LOCAL_DEST:-$DEFAULT_DEST}"
