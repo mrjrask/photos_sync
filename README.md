@@ -4,13 +4,20 @@ Ongoing service that exports every photo and video in your Mac's Photos
 library, full resolution, to the `data` Samba share on `cm5.local`, sorted
 into one folder per capture day.
 
+**Want a copy on this Mac's own disk instead of (or in addition to) the
+NAS?** See [Local-disk variant](#local-disk-variant) below — it's the same
+tool, just writing to `~/Pictures/PhotosBackup` instead of `/Volumes/data`,
+and can be installed independently of everything above.
+
 ## What it does
 
-- **Destination:** `/Volumes/data/Photos/YYYY-MM-DD/` (one folder per capture
-  date, e.g. `2026-08-18/`). Photos' Moments/Events grouping isn't exposed as
-  a stable ID by the export tool, so day-based folders are used instead, per
-  your fallback instruction — this also keeps incremental syncs reliable
-  (files never need to move between folders on a later run).
+- **Destination:** `/Volumes/data/Photos/YYYY-MM-DD/` by default — one folder
+  per capture date, e.g. `2026-08-18/`. `install.sh` asks which folder to use
+  (see **Choosing the destination folder** below) and remembers your answer.
+  Photos' Moments/Events grouping isn't exposed as a stable ID by the export
+  tool, so day-based folders are used instead, per your fallback instruction
+  — this also keeps incremental syncs reliable (files never need to move
+  between folders on a later run).
 - **Full resolution:** originals only, never Photos' scaled/preview copies.
   Items that are iCloud-optimized (not fully downloaded to this Mac) are
   force-downloaded before export.
@@ -49,6 +56,7 @@ into one folder per capture day.
 | `mount_nas_share.sh` | Mounts `smb://cm5.local/data` at `/Volumes/data` if not already mounted |
 | `sync_photos.sh` | The actual sync: mount check + `osxphotos export` |
 | `com.jason.photosnassync.plist` | launchd agent definition (installed to `~/Library/LaunchAgents/`) |
+| `install_local.sh`, `uninstall_local.sh`, `sync_photos_local.sh`, `com.jason.photoslocalsync.plist` | The [local-disk variant](#local-disk-variant) — same idea, no NAS involved |
 
 All `.sh` scripts are tracked as executable in this repo, so `./install.sh`
 and `./uninstall.sh` work directly; `bash install.sh` also still works.
@@ -69,18 +77,34 @@ already done — skip ahead.
 ## Setup
 
 ```bash
-cd photos_nas_sync
+cd photos_sync
 ./install.sh
 ```
 
 This installs osxphotos (via pipx, or Homebrew+pipx, or `pip3 --user` as a
-fallback), copies the scripts to `~/photos_nas_sync/`, installs and loads the
+fallback), copies the scripts to `~/photos_sync/`, installs and loads the
 launchd agent, and runs the first sync immediately.
 
 **Important:** the first run may trigger a macOS permission dialog asking to
 allow access to your Photos library. Click **Allow** — if you don't, the
 scheduled background runs will fail silently (no GUI dialog can appear when
 launchd runs headless).
+
+### Choosing the destination folder
+
+`install.sh` starts by asking:
+```
+Destination folder on the NAS share [/Volumes/data/Photos]:
+```
+Press Enter to accept the default, or type a different path. Your answer is
+saved to `~/Library/Application Support/photos-sync/config` as
+`DEST_ROOT_NAS` and used by every future run of `sync_photos.sh`. To change
+it later, either re-run `./install.sh` (it re-prompts) or edit that config
+file directly. You can also skip the prompt entirely by setting
+`PHOTOS_NAS_DEST` before running `install.sh`, e.g.:
+```bash
+PHOTOS_NAS_DEST="/Volumes/data/Photos Backup" ./install.sh
+```
 
 ## Verifying it's working
 
@@ -102,7 +126,7 @@ ls "/Volumes/data/Photos/$(date +%Y-%m-%d)/"
 
 Force a run right now without waiting for the schedule:
 ```bash
-~/photos_nas_sync/sync_photos.sh
+~/photos_sync/sync_photos.sh
 tail -f ~/Library/Logs/photos-nas-sync.log
 ```
 
@@ -195,7 +219,7 @@ things make this go smoothly:
 - **No files exported after the first run** — that's expected; `--update`
   means only *new* items copy on subsequent runs.
 - **Permission dialog never appeared / export silently does nothing** — run
-  `~/photos_nas_sync/sync_photos.sh` manually from Terminal once so macOS can
+  `~/photos_sync/sync_photos.sh` manually from Terminal once so macOS can
   prompt you for Photos access interactively, then check
   System Settings → Privacy & Security → Photos.
 - **`Operation not permitted:
@@ -216,7 +240,7 @@ things make this go smoothly:
   (`--exportdb`), a retry resumes at the first not-yet-exported item rather
   than starting over — no duplicates, nothing lost. If it still fails after
   all retries, it logs that and waits for the next scheduled run (or run
-  `~/photos_nas_sync/sync_photos.sh` manually once the NAS is confirmed
+  `~/photos_sync/sync_photos.sh` manually once the NAS is confirmed
   back up).
 - **`mkdir: /Volumes/data/Photos: Operation not permitted`** — this happened
   during initial install because the manual first run and the login-triggered
@@ -295,21 +319,23 @@ things make this go smoothly:
      `IMG_1234 (1).jpg`-style names). Review the list, confirm the
      non-suffixed original is intact for each, then delete, e.g.
      `find /Volumes/data/Photos -regex '.* ([0-9]+)\..*' -delete`.
-  5. Once you're satisfied, re-run `~/photos_nas_sync/sync_photos.sh` for
+  5. Once you're satisfied, re-run `~/photos_sync/sync_photos.sh` for
      real; future runs will go back to being a true incremental delta.
 
 ## Uninstalling
 
 ```bash
-cd photos_nas_sync
+cd photos_sync
 ./uninstall.sh
 ```
 
 By default this stops and removes the launchd agent and deletes the copied
-scripts in `~/photos_nas_sync`. It deliberately leaves alone: anything
-already exported to `/Volumes/data/Photos` (your synced photos/videos),
-osxphotos itself, and the Keychain entry for the share — none of those are
-safe to delete automatically.
+scripts (`sync_photos.sh`, `mount_nas_share.sh`) from `~/photos_sync` (the
+folder itself stays if the [local-disk variant](#local-disk-variant) is also
+installed there). It deliberately leaves alone: anything already exported to
+your destination folder (your synced photos/videos), osxphotos itself, and
+the Keychain entry for the share — none of those are safe to delete
+automatically.
 
 Optional flags:
 ```bash
@@ -318,5 +344,97 @@ Optional flags:
 ```
 
 To delete the exported photos/videos from the NAS too, do that manually from
-Finder/Terminal on `/Volumes/data/Photos` — this is intentionally not
-automated since it's not reversible.
+Finder/Terminal on your destination folder (default `/Volumes/data/Photos`)
+— this is intentionally not automated since it's not reversible.
+
+## Local-disk variant
+
+Everything above exports to the NAS. If you'd rather (or also) keep a copy
+on this Mac's own disk — no NAS, no Samba share, no Keychain step — use the
+local-disk variant instead. It's the same tool (same `osxphotos` flags, same
+incremental/`--exiftool`/locking/log-rotation behavior described above),
+just pointed at a local folder.
+
+| File | Purpose |
+|---|---|
+| `install_local.sh` | One-time setup for the local-disk variant |
+| `uninstall_local.sh` | Removes it (same `--remove-logs` / `--remove-osxphotos` flags as `uninstall.sh`) |
+| `sync_photos_local.sh` | The actual sync: `osxphotos export` to your chosen local folder |
+| `com.jason.photoslocalsync.plist` | launchd agent definition (runs daily at 03:15, offset from the NAS variant's 03:00 so the two don't race if both are installed) |
+
+### Setup
+
+```bash
+cd photos_sync
+./install_local.sh
+```
+
+This prompts for a destination folder:
+```
+Destination folder on this Mac [/Users/you/Pictures/PhotosBackup]:
+```
+Press Enter to accept the default, or type a different path (e.g. an
+external drive mounted under `/Volumes`). Your answer is saved to
+`~/Library/Application Support/photos-sync/config` as `DEST_ROOT_LOCAL` and
+used by every future run of `sync_photos_local.sh`. To change it later,
+either re-run `./install_local.sh` (it re-prompts) or edit that config file
+directly. You can also skip the prompt by setting `PHOTOS_LOCAL_DEST`
+beforehand, e.g.:
+```bash
+PHOTOS_LOCAL_DEST="/Volumes/External SSD/Photos" ./install_local.sh
+```
+
+Like `install.sh`, this also installs osxphotos and exiftool if needed,
+copies `sync_photos_local.sh` to `~/photos_sync/`, runs the first sync
+immediately, and installs the launchd agent.
+
+**Important:** as with the NAS variant, the first run may trigger a macOS
+permission dialog asking to allow access to your Photos library — click
+**Allow**, or scheduled runs will fail silently.
+
+### Verifying it's working
+
+```bash
+launchctl list | grep photoslocalsync
+tail -50 ~/Library/Logs/photos-local-sync.log
+ls ~/Pictures/PhotosBackup/          # or your chosen destination
+```
+
+Force a run right now:
+```bash
+~/photos_sync/sync_photos_local.sh
+tail -f ~/Library/Logs/photos-local-sync.log
+```
+
+### Differences from the NAS variant
+
+- No `mount_nas_share.sh` step and no run-level retry-with-backoff loop for
+  a dropped SMB connection — a local disk doesn't disconnect mid-export the
+  way a network share can. `osxphotos`' own `--retry 3` (per-file) still
+  applies, and a failed run still resumes cleanly on the next scheduled sync
+  thanks to `--update` and the local `--exportdb`.
+- Its own log file (`~/Library/Logs/photos-local-sync.log`), export
+  database (`~/Library/Application Support/photos-local-sync/export.db`),
+  lock (`/tmp/photos-local-sync.lock`), and launchd label
+  (`com.jason.photoslocalsync`) — installing this variant never interferes
+  with the NAS variant, and both can run side by side.
+- Everything else — day-based folders, full-resolution/`--download-missing`
+  originals, `--exiftool` metadata preservation, `caffeinate`/`taskpolicy`
+  wrapping, the local lock file, log rotation, and all the troubleshooting
+  entries above about osxphotos/exiftool/Photos-library-not-found/duplicate
+  re-exports — applies identically. The only NAS-specific troubleshooting
+  entries that don't apply are the ones about mounting, SMB drops, and
+  `/Volumes/data` permissions.
+
+### Uninstalling
+
+```bash
+cd photos_sync
+./uninstall_local.sh
+```
+
+Same behavior as `uninstall.sh`, scoped to this variant: stops and removes
+the `com.jason.photoslocalsync` launchd agent and deletes
+`sync_photos_local.sh` from `~/photos_sync` (again, that folder stays if the
+NAS variant is also installed there). Leaves your exported
+photos/videos, osxphotos, and the shared config file alone.
