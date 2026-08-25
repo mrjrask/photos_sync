@@ -4,14 +4,34 @@
 #   bash install.sh
 set -euo pipefail
 
-INSTALL_DIR="$HOME/photos_nas_sync"
+INSTALL_DIR="$HOME/photos_sync"
 PLIST_LABEL="com.jason.photosnassync"
 PLIST_DEST="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 SCRIPT_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$HOME/Library/Application Support/photos-sync/config"
 
 echo "== Installing Photos -> NAS sync =="
 
-echo "-- 1/6 Installing osxphotos (if needed)"
+echo "-- 1/7 Choosing destination folder"
+DEFAULT_DEST="/Volumes/data/Photos"
+if [ -n "${PHOTOS_NAS_DEST:-}" ]; then
+  NAS_DEST="$PHOTOS_NAS_DEST"
+  echo "   Using PHOTOS_NAS_DEST=$NAS_DEST"
+elif [ -t 0 ]; then
+  read -r -p "   Destination folder on the NAS share [$DEFAULT_DEST]: " NAS_DEST
+  NAS_DEST="${NAS_DEST:-$DEFAULT_DEST}"
+else
+  NAS_DEST="$DEFAULT_DEST"
+  echo "   Non-interactive shell; using default: $NAS_DEST"
+fi
+mkdir -p "$(dirname "$CONFIG_FILE")"
+touch "$CONFIG_FILE"
+grep -v '^DEST_ROOT_NAS=' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" 2>/dev/null || true
+mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+printf 'DEST_ROOT_NAS=%q\n' "$NAS_DEST" >> "$CONFIG_FILE"
+echo "   Saved to $CONFIG_FILE (change later by re-running install.sh, or editing that file directly)"
+
+echo "-- 2/7 Installing osxphotos (if needed)"
 if ! command -v osxphotos >/dev/null 2>&1; then
   if command -v pipx >/dev/null 2>&1; then
     pipx install osxphotos
@@ -27,7 +47,7 @@ else
   echo "osxphotos already installed: $(command -v osxphotos)"
 fi
 
-echo "-- 2/6 Installing exiftool (if needed)"
+echo "-- 3/7 Installing exiftool (if needed)"
 # sync_photos.sh passes osxphotos' --exiftool flag so that metadata living
 # only in the Photos library database (GPS location, title, caption,
 # keywords, person names) gets written into each exported file's own
@@ -46,7 +66,7 @@ else
   echo "exiftool already installed: $(command -v exiftool)"
 fi
 
-echo "-- 3/6 Copying scripts to $INSTALL_DIR"
+echo "-- 4/7 Copying scripts to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 if [ "$SCRIPT_SRC_DIR" != "$INSTALL_DIR" ]; then
   cp "$SCRIPT_SRC_DIR/sync_photos.sh" "$INSTALL_DIR/"
@@ -56,7 +76,7 @@ else
 fi
 chmod +x "$INSTALL_DIR/sync_photos.sh" "$INSTALL_DIR/mount_nas_share.sh"
 
-echo "-- 4/6 Running first sync now (this can take a while for a large library)"
+echo "-- 5/7 Running first sync now (this can take a while for a large library)"
 echo "   macOS may pop up a permission dialog asking to allow access to your"
 echo "   Photos library -- click Allow, or scheduled runs will silently fail."
 echo "   (Deliberately done BEFORE the launchd agent is installed below, so"
@@ -72,18 +92,18 @@ if "$INSTALL_DIR/sync_photos.sh"; then
 else
   echo "First run reported an error -- check $HOME/Library/Logs/photos-nas-sync.log"
   echo "Continuing to install the launchd agent anyway; fix the error above, then re-run:"
-  echo "  ~/photos_nas_sync/sync_photos.sh"
+  echo "  ~/photos_sync/sync_photos.sh"
 fi
 
-echo "-- 5/6 Installing launchd agent"
+echo "-- 6/7 Installing launchd agent"
 mkdir -p "$HOME/Library/LaunchAgents"
 sed "s#/Users/jason#$HOME#g" "$SCRIPT_SRC_DIR/${PLIST_LABEL}.plist" > "$PLIST_DEST"
 launchctl unload "$PLIST_DEST" >/dev/null 2>&1 || true
 launchctl load "$PLIST_DEST"
 
-echo "-- 6/6 Done."
+echo "-- 7/7 Done."
 echo ""
 echo "Logs:        $HOME/Library/Logs/photos-nas-sync.log"
-echo "Destination: /Volumes/data/Photos/YYYY-MM-DD/"
+echo "Destination: $NAS_DEST/YYYY-MM-DD/"
 echo "Schedule:    daily at 03:00, plus once at every login (RunAtLoad)"
 echo "Check job:   launchctl list | grep photosnassync"

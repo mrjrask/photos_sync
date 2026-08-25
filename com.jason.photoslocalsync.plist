@@ -3,32 +3,34 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.jason.photosnassync</string>
+    <string>com.jason.photoslocalsync</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/jason/photos_sync/sync_photos.sh</string>
+        <string>/Users/jason/photos_sync/sync_photos_local.sh</string>
     </array>
 
-    <!-- Runs once a day at 3:00 AM -->
+    <!-- Runs once a day at 3:15 AM (offset from the NAS sync's 3:00 AM so
+         the two don't compete for Photos library access if both are
+         installed on the same Mac). -->
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
         <integer>3</integer>
         <key>Minute</key>
-        <integer>0</integer>
+        <integer>15</integer>
     </dict>
 
     <!-- Also runs once whenever this agent (re)loads, e.g. at login,
-         so you're not stuck waiting until 3 AM to catch up. -->
+         so you're not stuck waiting until 3:15 AM to catch up. -->
     <key>RunAtLoad</key>
     <true/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jason/Library/Logs/photos-nas-sync.out.log</string>
+    <string>/Users/jason/Library/Logs/photos-local-sync.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jason/Library/Logs/photos-nas-sync.err.log</string>
+    <string>/Users/jason/Library/Logs/photos-local-sync.err.log</string>
 
     <key>ProcessType</key>
     <string>Background</string>

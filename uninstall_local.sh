@@ -1,28 +1,29 @@
 #!/bin/bash
-# Removes the Photos -> cm5 NAS sync service.
+# Removes the Photos -> local disk sync service (the local-disk counterpart
+# of uninstall.sh).
 #
 # By default this only:
 #   - unloads and deletes the launchd agent (stops future scheduled runs)
-#   - removes sync_photos.sh and mount_nas_share.sh from ~/photos_sync
-#     (that folder itself is left in place if the local-disk variant's
-#     script is also installed there -- see uninstall_local.sh)
+#   - removes sync_photos_local.sh from ~/photos_sync (that folder itself is
+#     left in place if the NAS variant's scripts are also installed there --
+#     see uninstall.sh)
 #
 # It deliberately does NOT touch:
-#   - anything already exported to /Volumes/data/Photos (your synced photos)
+#   - anything already exported to your chosen destination folder (your
+#     synced photos -- default ~/Pictures/PhotosBackup)
 #   - osxphotos itself (other tools/scripts on this Mac may use it)
-#   - the Keychain entry for the NAS share
 #
 # Pass --remove-logs to also delete the log files, and
 # --remove-osxphotos to additionally uninstall osxphotos.
 set -euo pipefail
 
 INSTALL_DIR="$HOME/photos_sync"
-PLIST_LABEL="com.jason.photosnassync"
+PLIST_LABEL="com.jason.photoslocalsync"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
 LOG_FILES=(
-  "$HOME/Library/Logs/photos-nas-sync.log"
-  "$HOME/Library/Logs/photos-nas-sync.out.log"
-  "$HOME/Library/Logs/photos-nas-sync.err.log"
+  "$HOME/Library/Logs/photos-local-sync.log"
+  "$HOME/Library/Logs/photos-local-sync.out.log"
+  "$HOME/Library/Logs/photos-local-sync.err.log"
 )
 
 REMOVE_LOGS=false
@@ -35,7 +36,7 @@ for arg in "$@"; do
   esac
 done
 
-echo "== Uninstalling Photos -> NAS sync =="
+echo "== Uninstalling Photos -> local disk sync =="
 
 echo "-- 1/4 Stopping and removing the launchd agent"
 if [ -f "$PLIST_PATH" ]; then
@@ -46,14 +47,14 @@ else
   echo "   No launchd agent found at $PLIST_PATH (already removed?)"
 fi
 
-echo "-- 2/4 Removing installed scripts"
+echo "-- 2/4 Removing installed script"
 if [ -d "$INSTALL_DIR" ]; then
-  rm -f "$INSTALL_DIR/sync_photos.sh" "$INSTALL_DIR/mount_nas_share.sh"
+  rm -f "$INSTALL_DIR/sync_photos_local.sh"
   rmdir "$INSTALL_DIR" 2>/dev/null || true
-  echo "   Removed sync_photos.sh and mount_nas_share.sh from $INSTALL_DIR"
+  echo "   Removed sync_photos_local.sh from $INSTALL_DIR"
   if [ -d "$INSTALL_DIR" ]; then
-    echo "   ($INSTALL_DIR left in place -- other files, e.g. the local-disk"
-    echo "   variant's sync_photos_local.sh, still live there)"
+    echo "   ($INSTALL_DIR left in place -- other files, e.g. the NAS"
+    echo "   variant's sync_photos.sh, still live there)"
   fi
 else
   echo "   $INSTALL_DIR not found (already removed?)"
@@ -83,6 +84,6 @@ fi
 
 echo ""
 echo "Done. Note: files already exported to your destination folder (see"
-echo "DEST_ROOT_NAS in ~/Library/Application Support/photos-sync/config,"
-echo "default /Volumes/data/Photos) were NOT deleted -- remove them yourself"
-echo "from the NAS if you no longer want them."
+echo "DEST_ROOT_LOCAL in ~/Library/Application Support/photos-sync/config,"
+echo "default ~/Pictures/PhotosBackup) were NOT deleted -- remove them"
+echo "yourself if you no longer want them."

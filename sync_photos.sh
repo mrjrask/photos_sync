@@ -12,7 +12,19 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEST_ROOT="/Volumes/data/Photos"
+
+# Destination folder is configurable -- install.sh prompts for it and saves
+# the choice to CONFIG_FILE as DEST_ROOT_NAS. Falls back to the original
+# default if unset (e.g. an older config, or the script run standalone).
+# PHOTOS_NAS_DEST always wins when set, for one-off overrides without
+# touching the saved config.
+CONFIG_FILE="$HOME/Library/Application Support/photos-sync/config"
+if [ -f "$CONFIG_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
+DEST_ROOT="${PHOTOS_NAS_DEST:-${DEST_ROOT_NAS:-/Volumes/data/Photos}}"
+
 LOG_FILE="$HOME/Library/Logs/photos-nas-sync.log"
 LOG_TAG="[photos-nas-sync]"
 
