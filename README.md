@@ -49,17 +49,22 @@ and can be installed independently of everything above.
 
 ## Files
 
+The repo is split into a `nas/` folder (exports to the cm5 NAS share) and a
+`local/` folder (exports to a folder on this Mac) — see
+[Local-disk variant](#local-disk-variant) below for the latter.
+
 | File | Purpose |
 |---|---|
-| `install.sh` | One-time setup — run this first |
-| `uninstall.sh` | Removes the service (see **Uninstalling** below) |
-| `mount_nas_share.sh` | Mounts `smb://cm5.local/data` at `/Volumes/data` if not already mounted |
-| `sync_photos.sh` | The actual sync: mount check + `osxphotos export` |
-| `com.jason.photosnassync.plist` | launchd agent definition (installed to `~/Library/LaunchAgents/`) |
-| `install_local.sh`, `uninstall_local.sh`, `sync_photos_local.sh`, `com.jason.photoslocalsync.plist` | The [local-disk variant](#local-disk-variant) — same idea, no NAS involved |
+| `nas/install.sh` | One-time setup — run this first |
+| `nas/uninstall.sh` | Removes the service (see **Uninstalling** below) |
+| `nas/mount_nas_share.sh` | Mounts `smb://cm5.local/data` at `/Volumes/data` if not already mounted |
+| `nas/sync_photos.sh` | The actual sync: mount check + `osxphotos export` |
+| `nas/com.jason.photosnassync.plist` | launchd agent definition (installed to `~/Library/LaunchAgents/`) |
+| `local/install_local.sh`, `local/uninstall_local.sh`, `local/sync_photos_local.sh`, `local/com.jason.photoslocalsync.plist` | The [local-disk variant](#local-disk-variant) — same idea, no NAS involved |
 
 All `.sh` scripts are tracked as executable in this repo, so `./install.sh`
-and `./uninstall.sh` work directly; `bash install.sh` also still works.
+and `./uninstall.sh` work directly from within their folder; `bash install.sh`
+also still works.
 
 ## Prerequisite (do this once, before running install.sh)
 
@@ -77,7 +82,7 @@ already done — skip ahead.
 ## Setup
 
 ```bash
-cd photos_sync
+cd photos_sync/nas
 ./install.sh
 ```
 
@@ -325,7 +330,7 @@ things make this go smoothly:
 ## Uninstalling
 
 ```bash
-cd photos_sync
+cd photos_sync/nas
 ./uninstall.sh
 ```
 
@@ -357,15 +362,15 @@ just pointed at a local folder.
 
 | File | Purpose |
 |---|---|
-| `install_local.sh` | One-time setup for the local-disk variant |
-| `uninstall_local.sh` | Removes it (same `--remove-logs` / `--remove-osxphotos` flags as `uninstall.sh`) |
-| `sync_photos_local.sh` | The actual sync: `osxphotos export` to your chosen local folder |
-| `com.jason.photoslocalsync.plist` | launchd agent definition (runs daily at 03:15, offset from the NAS variant's 03:00 so the two don't race if both are installed) |
+| `local/install_local.sh` | One-time setup for the local-disk variant |
+| `local/uninstall_local.sh` | Removes it (same `--remove-logs` / `--remove-osxphotos` flags as `uninstall.sh`) |
+| `local/sync_photos_local.sh` | The actual sync: `osxphotos export` to your chosen local folder |
+| `local/com.jason.photoslocalsync.plist` | launchd agent definition (runs daily at 03:15, offset from the NAS variant's 03:00 so the two don't race if both are installed) |
 
 ### Setup
 
 ```bash
-cd photos_sync
+cd photos_sync/local
 ./install_local.sh
 ```
 
@@ -429,7 +434,7 @@ tail -f ~/Library/Logs/photos-local-sync.log
 ### Uninstalling
 
 ```bash
-cd photos_sync
+cd photos_sync/local
 ./uninstall_local.sh
 ```
 
