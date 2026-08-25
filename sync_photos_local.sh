@@ -11,8 +11,6 @@
 # --update to work correctly across runs).
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 # Destination folder is configurable -- install_local.sh prompts for it and
 # saves the choice to CONFIG_FILE as DEST_ROOT_LOCAL. Falls back to the
 # original default if unset (e.g. an older config, or the script run
