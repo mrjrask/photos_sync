@@ -32,6 +32,9 @@ LOG_TAG="[photos-local-sync]"
 # ever move or reorganize the export folder itself.
 EXPORT_DB_DIR="$HOME/Library/Application Support/photos-local-sync"
 EXPORT_DB="$EXPORT_DB_DIR/export.db"
+BATCH_CURSOR="$EXPORT_DB_DIR/batch-cursor"
+BATCH_START="${PHOTOS_BATCH_START:-2005-08}"
+BATCH_PAUSE_SECONDS="${PHOTOS_BATCH_PAUSE_SECONDS:-5}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -119,19 +122,6 @@ if [ ! -d "$PHOTOS_LIBRARY" ]; then
   exit 1
 fi
 
-EXPORT_CMD=(
-  "$OSXPHOTOS_BIN" export "$DEST_ROOT"
-  --library "$PHOTOS_LIBRARY"
-  --update
-  --exportdb "$EXPORT_DB"
-  --download-missing
-  --directory "{created.date}"
-  --retry 3
-  --touch-file
-  --exiftool
-  --verbose
-)
-
 # Wrapped in caffeinate so macOS doesn't idle/system-sleep mid-export -- this
 # run can take hours (or longer) on an initial large library. Also wrapped
 # in `taskpolicy -b` so osxphotos and the exiftool process it shells out to
@@ -139,7 +129,25 @@ EXPORT_CMD=(
 # make the machine feel sluggish while you're using it. See sync_photos.sh
 # for the full explanation of both.
 run_export() {
-  local cmd=("${EXPORT_CMD[@]}")
+  local from_date="$1" to_date="${2:-}"
+  local cmd=(
+    "$OSXPHOTOS_BIN" export "$DEST_ROOT"
+    --library "$PHOTOS_LIBRARY"
+    --update
+    --exportdb "$EXPORT_DB"
+    --download-missing
+    --directory "{created.date}"
+    --retry 3
+    --touch-file
+    --exiftool
+    --verbose
+  )
+  if [ -n "$from_date" ]; then
+    cmd+=(--from-date "$from_date")
+  fi
+  if [ -n "$to_date" ]; then
+    cmd+=(--to-date "$to_date")
+  fi
   if command -v taskpolicy >/dev/null 2>&1; then
     cmd=(taskpolicy -b "${cmd[@]}")
   fi
@@ -150,10 +158,120 @@ run_export() {
   fi
 }
 
-if ! run_export; then
-  status=$?
-  echo "$LOG_TAG export failed (exit $status) -- will resume at the next scheduled sync (--update picks up where this left off)."
+if ! [[ "$BATCH_START" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+  echo "$LOG_TAG ERROR: PHOTOS_BATCH_START must use YYYY-MM format (got: $BATCH_START)."
+  exit 1
+fi
+if ! [[ "$BATCH_PAUSE_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "$LOG_TAG ERROR: PHOTOS_BATCH_PAUSE_SECONDS must be a non-negative integer (got: $BATCH_PAUSE_SECONDS)."
+  exit 1
+fi
+
+next_month() {
+  date -j -f "%Y-%m-%d" "$1-01" -v+1m "+%Y-%m"
+}
+
+month_end() {
+  date -j -f "%Y-%m-%d" "$1-01" -v+1m -v-1d "+%Y-%m-%d"
+}
+
+previous_day() {
+  date -j -f "%Y-%m-%d" "$1" -v-1d "+%Y-%m-%d"
+}
+
+# Run each calendar month in a new osxphotos process. This bounds the amount
+# of work and transient memory retained by any one process. The cursor is
+# advanced atomically only after a successful month, so an interruption
+# resumes that month on the next launch. Once a complete pass reaches the
+# month that was current at run start, reset the cursor for the next run;
+# this allows --update to discover edits or newly imported older photos.
+run_end_month="$(date '+%Y-%m')"
+if [[ "$BATCH_START" > "$run_end_month" ]]; then
+  echo "$LOG_TAG ERROR: PHOTOS_BATCH_START ($BATCH_START) cannot be later than the current month ($run_end_month)."
+  exit 1
+fi
+batch_month="$BATCH_START"
+future_from=""
+if [ -f "$BATCH_CURSOR" ]; then
+  saved_cursor="$(cat "$BATCH_CURSOR")"
+  if [[ "$saved_cursor" =~ ^future:([0-9]{4}-(0[1-9]|1[0-2])-01)$ ]]; then
+    batch_month="future"
+    future_from="${BASH_REMATCH[1]}"
+  elif [ "$saved_cursor" = "future" ]; then
+    # Compatibility with the original sentinel, which did not retain its
+    # boundary. Starting at BATCH_START is deliberately conservative: it
+    # cannot omit an asset even if this cursor sat untouched for months.
+    batch_month="future"
+    future_from="$BATCH_START-01"
+    echo "$LOG_TAG Legacy future cursor has no boundary; resuming open-ended from $future_from."
+  elif [[ "$saved_cursor" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]] && [[ "$saved_cursor" > "$BATCH_START" || "$saved_cursor" == "$BATCH_START" ]]; then
+    batch_month="$saved_cursor"
+  else
+    echo "$LOG_TAG Ignoring invalid batch cursor: $saved_cursor"
+  fi
+fi
+
+# Always begin with an open-ended pre-start batch. This catches scans, bad
+# camera clocks, and later date adjustments before BATCH_START without
+# guessing how old an asset might be. It is intentionally repeated on every
+# invocation so an older import cannot wait for the current cursor pass to
+# wrap; --update makes already completed items cheap to revisit.
+past_to="$(previous_day "$BATCH_START-01")"
+echo "$LOG_TAG Starting pre-start batch (through $past_to)."
+set +e
+run_export "" "$past_to"
+status=$?
+set -e
+if [ "$status" -ne 0 ]; then
+  echo "$LOG_TAG Pre-start batch failed (exit $status) -- will retry it at the next scheduled sync."
   exit "$status"
 fi
+echo "$LOG_TAG Completed pre-start batch."
+
+while [ "$batch_month" != "future" ] && [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month" ]]; do
+  from_date="$batch_month-01"
+  to_date="$(month_end "$batch_month")"
+  echo "$LOG_TAG Starting batch $batch_month ($from_date through $to_date)."
+  set +e
+  run_export "$from_date" "$to_date"
+  status=$?
+  set -e
+  if [ "$status" -ne 0 ]; then
+    echo "$LOG_TAG Batch $batch_month failed (exit $status) -- will resume this month at the next scheduled sync."
+    exit "$status"
+  fi
+  following_month="$(next_month "$batch_month")"
+  printf '%s\n' "$following_month" > "$BATCH_CURSOR.tmp"
+  mv -f "$BATCH_CURSOR.tmp" "$BATCH_CURSOR"
+  echo "$LOG_TAG Completed batch $batch_month; next batch is $following_month."
+  batch_month="$following_month"
+  if [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month" ]]; then
+    sleep "$BATCH_PAUSE_SECONDS"
+  fi
+done
+
+# Capture assets dated beyond the current month (for example, a bad camera
+# clock or a manually adjusted date). With no --to-date this final batch is
+# intentionally open-ended. Persist a sentinel first so a failure resumes
+# here instead of repeating all completed calendar months.
+if [ -z "$future_from" ]; then
+  future_from="$(next_month "$run_end_month")-01"
+fi
+printf 'future:%s\n' "$future_from" > "$BATCH_CURSOR.tmp"
+mv -f "$BATCH_CURSOR.tmp" "$BATCH_CURSOR"
+echo "$LOG_TAG Starting future-dated batch ($future_from and later)."
+set +e
+run_export "$future_from"
+status=$?
+set -e
+if [ "$status" -ne 0 ]; then
+  echo "$LOG_TAG Future-dated batch failed (exit $status) -- will resume this batch at the next scheduled sync."
+  exit "$status"
+fi
+echo "$LOG_TAG Completed future-dated batch."
+
+printf '%s\n' "$BATCH_START" > "$BATCH_CURSOR.tmp"
+mv -f "$BATCH_CURSOR.tmp" "$BATCH_CURSOR"
+echo "$LOG_TAG Completed full pass through $run_end_month; cursor reset to $BATCH_START for the next run."
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') $LOG_TAG run end ====="
