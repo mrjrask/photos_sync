@@ -36,7 +36,8 @@ and can be installed independently of everything above.
   launching a fresh `osxphotos` process for every capture month. This keeps a
   535,000+ item library out of one ever-growing process and releases transient
   memory and file resources between batches. A five-second pause separates
-  batches. The script continues through all remaining months in the same run.
+  batches. The script continues through all remaining months in the same run,
+  then uses an open-ended final batch for assets dated after the current month.
 - **Schedule:** runs daily at 3:00 AM, plus once whenever you log in.
 - **Tooling:** [osxphotos](https://github.com/RhetTbull/osxphotos) (the
   standard CLI for scripted Photos exports) driven by a macOS launchd agent.
@@ -159,10 +160,13 @@ automatically divided into calendar-month batches beginning with August 2005;
 each completed month is recorded locally in `batch-cursor`, beside that
 variant's export database. If the run fails or is stopped, the next launch
 retries the interrupted month rather than returning to the beginning. After a
-full pass through the month that was current when the run started, the cursor
-resets to August 2005 for the next scheduled run. The existing `--update`
-database makes later passes cheap while still detecting changes to older
-items. A few things make this go smoothly:
+full pass through the month that was current when the run started, a final
+open-ended batch exports anything dated in the future (such as an asset from a
+misconfigured camera clock or a manually adjusted date). The cursor uses the
+`future` marker while that batch runs, so an interruption resumes it directly.
+After it succeeds, the cursor resets to August 2005 for the next scheduled
+run. The existing `--update` database makes later passes cheap while still
+detecting changes to older items. A few things make this go smoothly:
 
 - **Resource usage is bounded per month.** Each batch uses a completely new
   `osxphotos` process, so memory and other process resources accumulated by

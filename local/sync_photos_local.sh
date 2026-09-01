@@ -129,14 +129,13 @@ fi
 # make the machine feel sluggish while you're using it. See sync_photos.sh
 # for the full explanation of both.
 run_export() {
-  local from_date="$1" to_date="$2"
+  local from_date="$1" to_date="${2:-}"
   local cmd=(
     "$OSXPHOTOS_BIN" export "$DEST_ROOT"
     --library "$PHOTOS_LIBRARY"
     --update
     --exportdb "$EXPORT_DB"
     --from-date "$from_date"
-    --to-date "$to_date"
     --download-missing
     --directory "{created.date}"
     --retry 3
@@ -144,6 +143,9 @@ run_export() {
     --exiftool
     --verbose
   )
+  if [ -n "$to_date" ]; then
+    cmd+=(--to-date "$to_date")
+  fi
   if command -v taskpolicy >/dev/null 2>&1; then
     cmd=(taskpolicy -b "${cmd[@]}")
   fi
@@ -185,14 +187,16 @@ fi
 batch_month="$BATCH_START"
 if [ -f "$BATCH_CURSOR" ]; then
   saved_cursor="$(cat "$BATCH_CURSOR")"
-  if [[ "$saved_cursor" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]] && [[ "$saved_cursor" > "$BATCH_START" || "$saved_cursor" == "$BATCH_START" ]]; then
+  if [ "$saved_cursor" = "future" ]; then
+    batch_month="future"
+  elif [[ "$saved_cursor" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]] && [[ "$saved_cursor" > "$BATCH_START" || "$saved_cursor" == "$BATCH_START" ]]; then
     batch_month="$saved_cursor"
   else
     echo "$LOG_TAG Ignoring invalid batch cursor: $saved_cursor"
   fi
 fi
 
-while [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month" ]]; do
+while [ "$batch_month" != "future" ] && [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month" ]]; do
   from_date="$batch_month-01"
   to_date="$(month_end "$batch_month")"
   echo "$LOG_TAG Starting batch $batch_month ($from_date through $to_date)."
@@ -213,6 +217,24 @@ while [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month"
     sleep "$BATCH_PAUSE_SECONDS"
   fi
 done
+
+# Capture assets dated beyond the current month (for example, a bad camera
+# clock or a manually adjusted date). With no --to-date this final batch is
+# intentionally open-ended. Persist a sentinel first so a failure resumes
+# here instead of repeating all completed calendar months.
+future_from="$(next_month "$run_end_month")-01"
+printf '%s\n' "future" > "$BATCH_CURSOR.tmp"
+mv -f "$BATCH_CURSOR.tmp" "$BATCH_CURSOR"
+echo "$LOG_TAG Starting future-dated batch ($future_from and later)."
+set +e
+run_export "$future_from"
+status=$?
+set -e
+if [ "$status" -ne 0 ]; then
+  echo "$LOG_TAG Future-dated batch failed (exit $status) -- will resume this batch at the next scheduled sync."
+  exit "$status"
+fi
+echo "$LOG_TAG Completed future-dated batch."
 
 printf '%s\n' "$BATCH_START" > "$BATCH_CURSOR.tmp"
 mv -f "$BATCH_CURSOR.tmp" "$BATCH_CURSOR"

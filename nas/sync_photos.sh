@@ -203,14 +203,13 @@ fi
 # macOS fetch them at its own pace instead of osxphotos forcing it all at
 # once.
 run_export() {
-  local from_date="$1" to_date="$2"
+  local from_date="$1" to_date="${2:-}"
   local cmd=(
     "$OSXPHOTOS_BIN" export "$DEST_ROOT"
     --library "$PHOTOS_LIBRARY"
     --update
     --exportdb "$EXPORT_DB"
     --from-date "$from_date"
-    --to-date "$to_date"
     --download-missing
     --directory "{created.date}"
     --retry 3
@@ -218,6 +217,9 @@ run_export() {
     --exiftool
     --verbose
   )
+  if [ -n "$to_date" ]; then
+    cmd+=(--to-date "$to_date")
+  fi
   if command -v taskpolicy >/dev/null 2>&1; then
     cmd=(taskpolicy -b "${cmd[@]}")
   fi
@@ -257,7 +259,9 @@ fi
 batch_month="$BATCH_START"
 if [ -f "$BATCH_CURSOR" ]; then
   saved_cursor="$(cat "$BATCH_CURSOR")"
-  if [[ "$saved_cursor" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]] && [[ "$saved_cursor" > "$BATCH_START" || "$saved_cursor" == "$BATCH_START" ]]; then
+  if [ "$saved_cursor" = "future" ]; then
+    batch_month="future"
+  elif [[ "$saved_cursor" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]] && [[ "$saved_cursor" > "$BATCH_START" || "$saved_cursor" == "$BATCH_START" ]]; then
     batch_month="$saved_cursor"
   else
     echo "$LOG_TAG Ignoring invalid batch cursor: $saved_cursor"
@@ -265,7 +269,7 @@ if [ -f "$BATCH_CURSOR" ]; then
 fi
 
 RETRY_DELAYS=(60 180 300)
-while [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month" ]]; do
+while [ "$batch_month" != "future" ] && [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month" ]]; do
   from_date="$batch_month-01"
   to_date="$(month_end "$batch_month")"
   echo "$LOG_TAG Starting batch $batch_month ($from_date through $to_date)."
@@ -295,6 +299,32 @@ while [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month"
     sleep "$BATCH_PAUSE_SECONDS"
   fi
 done
+
+# Finish with an open-ended batch so photos whose capture dates are later
+# than the current month are never omitted. Reuse the same retry/remount
+# policy as a normal month and persist a sentinel for exact resumption.
+future_from="$(next_month "$run_end_month")-01"
+printf '%s\n' "future" > "$BATCH_CURSOR.tmp"
+mv -f "$BATCH_CURSOR.tmp" "$BATCH_CURSOR"
+echo "$LOG_TAG Starting future-dated batch ($future_from and later)."
+attempt=1
+while true; do
+  set +e
+  run_export "$future_from"
+  status=$?
+  set -e
+  [ "$status" -eq 0 ] && break
+  if [ "$attempt" -gt "${#RETRY_DELAYS[@]}" ]; then
+    echo "$LOG_TAG Future-dated batch failed after $attempt attempts (exit $status) -- will resume this batch next run."
+    exit "$status"
+  fi
+  delay="${RETRY_DELAYS[$((attempt - 1))]}"
+  echo "$LOG_TAG Future-dated batch attempt $attempt failed (exit $status) -- retrying in ${delay}s."
+  sleep "$delay"
+  "$SCRIPT_DIR/mount_nas_share.sh" || true
+  attempt=$((attempt + 1))
+done
+echo "$LOG_TAG Completed future-dated batch."
 
 printf '%s\n' "$BATCH_START" > "$BATCH_CURSOR.tmp"
 mv -f "$BATCH_CURSOR.tmp" "$BATCH_CURSOR"
