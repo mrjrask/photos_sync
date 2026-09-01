@@ -38,6 +38,9 @@ LOG_TAG="[photos-nas-sync]"
 # of the network share's behavior.
 EXPORT_DB_DIR="$HOME/Library/Application Support/photos-nas-sync"
 EXPORT_DB="$EXPORT_DB_DIR/export.db"
+BATCH_CURSOR="$EXPORT_DB_DIR/batch-cursor"
+BATCH_START="${PHOTOS_BATCH_START:-2005-08}"
+BATCH_PAUSE_SECONDS="${PHOTOS_BATCH_PAUSE_SECONDS:-5}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -178,19 +181,6 @@ if [ ! -d "$PHOTOS_LIBRARY" ]; then
   exit 1
 fi
 
-EXPORT_CMD=(
-  "$OSXPHOTOS_BIN" export "$DEST_ROOT"
-  --library "$PHOTOS_LIBRARY"
-  --update
-  --exportdb "$EXPORT_DB"
-  --download-missing
-  --directory "{created.date}"
-  --retry 3
-  --touch-file
-  --exiftool
-  --verbose
-)
-
 # Wrapped in caffeinate so macOS doesn't idle/system-sleep mid-export and
 # drop the SMB mount -- this run can take hours (or longer) on an initial
 # large library. Note this can't override a closed laptop lid forcing
@@ -213,7 +203,21 @@ EXPORT_CMD=(
 # macOS fetch them at its own pace instead of osxphotos forcing it all at
 # once.
 run_export() {
-  local cmd=("${EXPORT_CMD[@]}")
+  local from_date="$1" to_date="$2"
+  local cmd=(
+    "$OSXPHOTOS_BIN" export "$DEST_ROOT"
+    --library "$PHOTOS_LIBRARY"
+    --update
+    --exportdb "$EXPORT_DB"
+    --from-date "$from_date"
+    --to-date "$to_date"
+    --download-missing
+    --directory "{created.date}"
+    --retry 3
+    --touch-file
+    --exiftool
+    --verbose
+  )
   if command -v taskpolicy >/dev/null 2>&1; then
     cmd=(taskpolicy -b "${cmd[@]}")
   fi
@@ -230,20 +234,70 @@ run_export() {
 # that means waiting for the next scheduled run (up to 24h) or a manual
 # restart. --update + the local --exportdb make a retry cheap: it resumes
 # at the first not-yet-exported item rather than starting over.
-RETRY_DELAYS=(60 180 300)
-attempt=1
-while true; do
-  run_export && break
-  status=$?
-  if [ "$attempt" -gt "${#RETRY_DELAYS[@]}" ]; then
-    echo "$LOG_TAG export failed after $attempt attempts (exit $status) -- giving up for this run; will resume at the next scheduled sync."
-    exit "$status"
+if ! [[ "$BATCH_START" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
+  echo "$LOG_TAG ERROR: PHOTOS_BATCH_START must use YYYY-MM format (got: $BATCH_START)."
+  exit 1
+fi
+if ! [[ "$BATCH_PAUSE_SECONDS" =~ ^[0-9]+$ ]]; then
+  echo "$LOG_TAG ERROR: PHOTOS_BATCH_PAUSE_SECONDS must be a non-negative integer (got: $BATCH_PAUSE_SECONDS)."
+  exit 1
+fi
+
+next_month() { date -j -f "%Y-%m-%d" "$1-01" -v+1m "+%Y-%m"; }
+month_end() { date -j -f "%Y-%m-%d" "$1-01" -v+1m -v-1d "+%Y-%m-%d"; }
+
+# A new osxphotos process is used for every capture month, releasing its
+# transient resources before the next batch. Persist the next month only
+# after success so interrupted exports resume safely.
+run_end_month="$(date '+%Y-%m')"
+if [[ "$BATCH_START" > "$run_end_month" ]]; then
+  echo "$LOG_TAG ERROR: PHOTOS_BATCH_START ($BATCH_START) cannot be later than the current month ($run_end_month)."
+  exit 1
+fi
+batch_month="$BATCH_START"
+if [ -f "$BATCH_CURSOR" ]; then
+  saved_cursor="$(cat "$BATCH_CURSOR")"
+  if [[ "$saved_cursor" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]] && [[ "$saved_cursor" > "$BATCH_START" || "$saved_cursor" == "$BATCH_START" ]]; then
+    batch_month="$saved_cursor"
+  else
+    echo "$LOG_TAG Ignoring invalid batch cursor: $saved_cursor"
   fi
-  delay="${RETRY_DELAYS[$((attempt - 1))]}"
-  echo "$LOG_TAG export attempt $attempt failed (exit $status) -- retrying in ${delay}s (e.g. in case the NAS is rebooting)..."
-  sleep "$delay"
-  "$SCRIPT_DIR/mount_nas_share.sh" || true
-  attempt=$((attempt + 1))
+fi
+
+RETRY_DELAYS=(60 180 300)
+while [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month" ]]; do
+  from_date="$batch_month-01"
+  to_date="$(month_end "$batch_month")"
+  echo "$LOG_TAG Starting batch $batch_month ($from_date through $to_date)."
+  attempt=1
+  while true; do
+    set +e
+    run_export "$from_date" "$to_date"
+    status=$?
+    set -e
+    [ "$status" -eq 0 ] && break
+    if [ "$attempt" -gt "${#RETRY_DELAYS[@]}" ]; then
+      echo "$LOG_TAG Batch $batch_month failed after $attempt attempts (exit $status) -- will resume this month next run."
+      exit "$status"
+    fi
+    delay="${RETRY_DELAYS[$((attempt - 1))]}"
+    echo "$LOG_TAG Batch $batch_month attempt $attempt failed (exit $status) -- retrying in ${delay}s."
+    sleep "$delay"
+    "$SCRIPT_DIR/mount_nas_share.sh" || true
+    attempt=$((attempt + 1))
+  done
+  following_month="$(next_month "$batch_month")"
+  printf '%s\n' "$following_month" > "$BATCH_CURSOR.tmp"
+  mv -f "$BATCH_CURSOR.tmp" "$BATCH_CURSOR"
+  echo "$LOG_TAG Completed batch $batch_month; next batch is $following_month."
+  batch_month="$following_month"
+  if [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month" ]]; then
+    sleep "$BATCH_PAUSE_SECONDS"
+  fi
 done
+
+printf '%s\n' "$BATCH_START" > "$BATCH_CURSOR.tmp"
+mv -f "$BATCH_CURSOR.tmp" "$BATCH_CURSOR"
+echo "$LOG_TAG Completed full pass through $run_end_month; cursor reset to $BATCH_START for the next run."
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') $LOG_TAG run end ====="

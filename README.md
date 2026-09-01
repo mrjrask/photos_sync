@@ -32,6 +32,11 @@ and can be installed independently of everything above.
   that makes this work is kept on local disk (`~/Library/Application
   Support/photos-nas-sync/export.db`), not on the NAS share, since SQLite's
   file locking isn't reliable over SMB.
+- **Monthly batches:** exports run from `2005-08` through the current month,
+  launching a fresh `osxphotos` process for every capture month. This keeps a
+  535,000+ item library out of one ever-growing process and releases transient
+  memory and file resources between batches. A five-second pause separates
+  batches. The script continues through all remaining months in the same run.
 - **Schedule:** runs daily at 3:00 AM, plus once whenever you log in.
 - **Tooling:** [osxphotos](https://github.com/RhetTbull/osxphotos) (the
   standard CLI for scripted Photos exports) driven by a macOS launchd agent.
@@ -149,8 +154,32 @@ launchctl load ~/Library/LaunchAgents/com.jason.photosnassync.plist
 
 ## Doing a large (e.g. ~1TB) initial migration
 
-The first run exports your entire library and can take many hours. A few
-things make this go smoothly:
+The first run exports your entire library and can take many hours. It is
+automatically divided into calendar-month batches beginning with August 2005;
+each completed month is recorded locally in `batch-cursor`, beside that
+variant's export database. If the run fails or is stopped, the next launch
+retries the interrupted month rather than returning to the beginning. After a
+full pass through the month that was current when the run started, the cursor
+resets to August 2005 for the next scheduled run. The existing `--update`
+database makes later passes cheap while still detecting changes to older
+items. A few things make this go smoothly:
+
+- **Resource usage is bounded per month.** Each batch uses a completely new
+  `osxphotos` process, so memory and other process resources accumulated by
+  the previous batch are returned to macOS. The wrapper waits five seconds
+  before starting the next month, but continues until caught up.
+- **Changing the starting month or pause:** the library's configured earliest
+  month is `2005-08`. Override it for either script with
+  `PHOTOS_BATCH_START=YYYY-MM`; use a month no later than the oldest asset or
+  older items will not be visited. Set `PHOTOS_BATCH_PAUSE_SECONDS` to change
+  the five-second inter-batch pause. For example:
+  ```bash
+  PHOTOS_BATCH_START=2005-08 PHOTOS_BATCH_PAUSE_SECONDS=10 \
+    ~/photos_sync/sync_photos.sh
+  ```
+  If you intentionally change the start month during an unfinished pass,
+  delete that variant's `batch-cursor` so the new value takes effect
+  immediately. Do not delete `export.db`.
 
 - **Prefer wired ethernet** over Wi-Fi for both this Mac and cm5 if possible
   — much faster and far less prone to dropping mid-transfer.
@@ -162,11 +191,11 @@ things make this go smoothly:
 - **Watch progress live:** the sync's own output goes entirely to the log
   file, not the terminal running `install.sh`. Open a second terminal and
   run `tail -f ~/Library/Logs/photos-nas-sync.log`.
-- **It's fine if it doesn't finish in one sitting.** The export is
-  incremental (`--update`) and resumable — if a run is interrupted (network
-  drop, sleep, reboot), the next run (scheduled at 3 AM, at login, or run
-  manually) picks up where it left off rather than starting over. For ~1TB
-  it may legitimately take more than one day/run to complete.
+- **It's fine if it doesn't finish in one sitting.** The export is incremental
+  (`--update`) and resumable at the current calendar month — if a run is
+  interrupted (network drop, sleep, reboot), the next run (scheduled at 3 AM,
+  at login, or run manually) retries that month and then continues forward.
+  For ~1TB it may legitimately take more than one day/run to complete.
 - **Check free space first** on both ends: `df -h /Volumes/data` on the NAS
   side (the sync now logs this automatically at the start of each run) and
   enough free space on this Mac's local disk, since iCloud-optimized
