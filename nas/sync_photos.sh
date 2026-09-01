@@ -209,7 +209,6 @@ run_export() {
     --library "$PHOTOS_LIBRARY"
     --update
     --exportdb "$EXPORT_DB"
-    --from-date "$from_date"
     --download-missing
     --directory "{created.date}"
     --retry 3
@@ -217,6 +216,9 @@ run_export() {
     --exiftool
     --verbose
   )
+  if [ -n "$from_date" ]; then
+    cmd+=(--from-date "$from_date")
+  fi
   if [ -n "$to_date" ]; then
     cmd+=(--to-date "$to_date")
   fi
@@ -247,6 +249,7 @@ fi
 
 next_month() { date -j -f "%Y-%m-%d" "$1-01" -v+1m "+%Y-%m"; }
 month_end() { date -j -f "%Y-%m-%d" "$1-01" -v+1m -v-1d "+%Y-%m-%d"; }
+previous_day() { date -j -f "%Y-%m-%d" "$1" -v-1d "+%Y-%m-%d"; }
 
 # A new osxphotos process is used for every capture month, releasing its
 # transient resources before the next batch. Persist the next month only
@@ -278,6 +281,31 @@ if [ -f "$BATCH_CURSOR" ]; then
 fi
 
 RETRY_DELAYS=(60 180 300)
+
+# Check the unbounded range before BATCH_START on every invocation. This
+# prevents old scans or newly corrected dates from being excluded, even when
+# the persisted monthly cursor is already far ahead.
+past_to="$(previous_day "$BATCH_START-01")"
+echo "$LOG_TAG Starting pre-start batch (through $past_to)."
+attempt=1
+while true; do
+  set +e
+  run_export "" "$past_to"
+  status=$?
+  set -e
+  [ "$status" -eq 0 ] && break
+  if [ "$attempt" -gt "${#RETRY_DELAYS[@]}" ]; then
+    echo "$LOG_TAG Pre-start batch failed after $attempt attempts (exit $status) -- will retry it next run."
+    exit "$status"
+  fi
+  delay="${RETRY_DELAYS[$((attempt - 1))]}"
+  echo "$LOG_TAG Pre-start batch attempt $attempt failed (exit $status) -- retrying in ${delay}s."
+  sleep "$delay"
+  "$SCRIPT_DIR/mount_nas_share.sh" || true
+  attempt=$((attempt + 1))
+done
+echo "$LOG_TAG Completed pre-start batch."
+
 while [ "$batch_month" != "future" ] && [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month" ]]; do
   from_date="$batch_month-01"
   to_date="$(month_end "$batch_month")"

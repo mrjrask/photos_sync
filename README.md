@@ -32,12 +32,13 @@ and can be installed independently of everything above.
   that makes this work is kept on local disk (`~/Library/Application
   Support/photos-nas-sync/export.db`), not on the NAS share, since SQLite's
   file locking isn't reliable over SMB.
-- **Monthly batches:** exports run from `2005-08` through the current month,
-  launching a fresh `osxphotos` process for every capture month. This keeps a
+- **Monthly batches:** each invocation first runs an open-ended batch for
+  assets dated before `2005-08`, then exports `2005-08` through the current
+  month with a fresh `osxphotos` process for every capture month. This keeps a
   535,000+ item library out of one ever-growing process and releases transient
   memory and file resources between batches. A five-second pause separates
-  batches. The script continues through all remaining months in the same run,
-  then uses an open-ended final batch for assets dated after the current month.
+  monthly batches. An open-ended final batch includes assets dated after the
+  current month.
 - **Schedule:** runs daily at 3:00 AM, plus once whenever you log in.
 - **Tooling:** [osxphotos](https://github.com/RhetTbull/osxphotos) (the
   standard CLI for scripted Photos exports) driven by a macOS launchd agent.
@@ -157,8 +158,11 @@ launchctl load ~/Library/LaunchAgents/com.jason.photosnassync.plist
 
 The first run exports your entire library and can take many hours. It is
 automatically divided into calendar-month batches beginning with August 2005;
-each completed month is recorded locally in `batch-cursor`, beside that
-variant's export database. If the run fails or is stopped, the next launch
+before those batches, an open-ended pre-start batch exports everything dated
+through July 31, 2005. That pre-start check runs on every invocation, so an old
+scan imported later or an asset newly adjusted to an older date is not delayed
+or omitted. Each completed month is recorded locally in `batch-cursor`, beside
+that variant's export database. If the run fails or is stopped, the next launch
 retries the interrupted month rather than returning to the beginning. After a
 full pass through the month that was current when the run started, a final
 open-ended batch exports anything dated in the future (such as an asset from a
@@ -177,9 +181,10 @@ smoothly:
   before starting the next month, but continues until caught up.
 - **Changing the starting month or pause:** the library's configured earliest
   month is `2005-08`. Override it for either script with
-  `PHOTOS_BATCH_START=YYYY-MM`; use a month no later than the oldest asset or
-  older items will not be visited. Set `PHOTOS_BATCH_PAUSE_SECONDS` to change
-  the five-second inter-batch pause. For example:
+  `PHOTOS_BATCH_START=YYYY-MM`. Assets before that month remain covered by the
+  open-ended pre-start batch, but choosing a value near the oldest expected
+  asset keeps that catch-all batch small. Set `PHOTOS_BATCH_PAUSE_SECONDS` to
+  change the five-second inter-batch pause. For example:
   ```bash
   PHOTOS_BATCH_START=2005-08 PHOTOS_BATCH_PAUSE_SECONDS=10 \
     ~/photos_sync/sync_photos.sh

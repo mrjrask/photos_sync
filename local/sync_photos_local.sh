@@ -135,7 +135,6 @@ run_export() {
     --library "$PHOTOS_LIBRARY"
     --update
     --exportdb "$EXPORT_DB"
-    --from-date "$from_date"
     --download-missing
     --directory "{created.date}"
     --retry 3
@@ -143,6 +142,9 @@ run_export() {
     --exiftool
     --verbose
   )
+  if [ -n "$from_date" ]; then
+    cmd+=(--from-date "$from_date")
+  fi
   if [ -n "$to_date" ]; then
     cmd+=(--to-date "$to_date")
   fi
@@ -171,6 +173,10 @@ next_month() {
 
 month_end() {
   date -j -f "%Y-%m-%d" "$1-01" -v+1m -v-1d "+%Y-%m-%d"
+}
+
+previous_day() {
+  date -j -f "%Y-%m-%d" "$1" -v-1d "+%Y-%m-%d"
 }
 
 # Run each calendar month in a new osxphotos process. This bounds the amount
@@ -204,6 +210,23 @@ if [ -f "$BATCH_CURSOR" ]; then
     echo "$LOG_TAG Ignoring invalid batch cursor: $saved_cursor"
   fi
 fi
+
+# Always begin with an open-ended pre-start batch. This catches scans, bad
+# camera clocks, and later date adjustments before BATCH_START without
+# guessing how old an asset might be. It is intentionally repeated on every
+# invocation so an older import cannot wait for the current cursor pass to
+# wrap; --update makes already completed items cheap to revisit.
+past_to="$(previous_day "$BATCH_START-01")"
+echo "$LOG_TAG Starting pre-start batch (through $past_to)."
+set +e
+run_export "" "$past_to"
+status=$?
+set -e
+if [ "$status" -ne 0 ]; then
+  echo "$LOG_TAG Pre-start batch failed (exit $status) -- will retry it at the next scheduled sync."
+  exit "$status"
+fi
+echo "$LOG_TAG Completed pre-start batch."
 
 while [ "$batch_month" != "future" ] && [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month" ]]; do
   from_date="$batch_month-01"
