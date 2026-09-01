@@ -185,10 +185,19 @@ if [[ "$BATCH_START" > "$run_end_month" ]]; then
   exit 1
 fi
 batch_month="$BATCH_START"
+future_from=""
 if [ -f "$BATCH_CURSOR" ]; then
   saved_cursor="$(cat "$BATCH_CURSOR")"
-  if [ "$saved_cursor" = "future" ]; then
+  if [[ "$saved_cursor" =~ ^future:([0-9]{4}-(0[1-9]|1[0-2])-01)$ ]]; then
     batch_month="future"
+    future_from="${BASH_REMATCH[1]}"
+  elif [ "$saved_cursor" = "future" ]; then
+    # Compatibility with the original sentinel, which did not retain its
+    # boundary. Starting at BATCH_START is deliberately conservative: it
+    # cannot omit an asset even if this cursor sat untouched for months.
+    batch_month="future"
+    future_from="$BATCH_START-01"
+    echo "$LOG_TAG Legacy future cursor has no boundary; resuming open-ended from $future_from."
   elif [[ "$saved_cursor" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]] && [[ "$saved_cursor" > "$BATCH_START" || "$saved_cursor" == "$BATCH_START" ]]; then
     batch_month="$saved_cursor"
   else
@@ -222,8 +231,10 @@ done
 # clock or a manually adjusted date). With no --to-date this final batch is
 # intentionally open-ended. Persist a sentinel first so a failure resumes
 # here instead of repeating all completed calendar months.
-future_from="$(next_month "$run_end_month")-01"
-printf '%s\n' "future" > "$BATCH_CURSOR.tmp"
+if [ -z "$future_from" ]; then
+  future_from="$(next_month "$run_end_month")-01"
+fi
+printf 'future:%s\n' "$future_from" > "$BATCH_CURSOR.tmp"
 mv -f "$BATCH_CURSOR.tmp" "$BATCH_CURSOR"
 echo "$LOG_TAG Starting future-dated batch ($future_from and later)."
 set +e

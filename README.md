@@ -163,10 +163,13 @@ retries the interrupted month rather than returning to the beginning. After a
 full pass through the month that was current when the run started, a final
 open-ended batch exports anything dated in the future (such as an asset from a
 misconfigured camera clock or a manually adjusted date). The cursor uses the
-`future` marker while that batch runs, so an interruption resumes it directly.
-After it succeeds, the cursor resets to August 2005 for the next scheduled
-run. The existing `--update` database makes later passes cheap while still
-detecting changes to older items. A few things make this go smoothly:
+`future:YYYY-MM-01` marker while that batch runs. The date is the batch's
+original lower boundary and remains unchanged across retries and later
+launches, including when the calendar month rolls over, so an interruption
+cannot create a gap. After it succeeds, the cursor resets to August 2005 for
+the next scheduled run. The existing `--update` database makes later passes
+cheap while still detecting changes to older items. A few things make this go
+smoothly:
 
 - **Resource usage is bounded per month.** Each batch uses a completely new
   `osxphotos` process, so memory and other process resources accumulated by
