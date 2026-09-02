@@ -51,6 +51,7 @@ BATCH_START="${PHOTOS_BATCH_START:-2005-08}"
 BATCH_SPAN_MONTHS="${PHOTOS_BATCH_SPAN_MONTHS:-12}"
 BATCH_PAUSE_SECONDS="${PHOTOS_BATCH_PAUSE_SECONDS:-5}"
 PHOTOS_VERBOSE="${PHOTOS_VERBOSE:-0}"
+PHOTOS_LIBRARY="${PHOTOS_LIBRARY:-$HOME/Pictures/Photos Library.photoslibrary}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -99,6 +100,11 @@ fi
 exec >> "$LOG_FILE" 2>&1
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') $LOG_TAG run start ====="
+
+# Start reporting before any NAS, destination, tool, or library preflight so
+# failed runs are represented in both the health log and JSON summary.
+init_sync_observability "nas"
+trap 'finish_sync_observability $?' EXIT
 
 # 1. Make sure the NAS share is mounted before we try to write anything to it.
 if ! "$SCRIPT_DIR/mount_nas_share.sh"; then
@@ -184,15 +190,11 @@ fi
 #                         library database -- not in the original file --
 #                         is retained on the NAS copy too.
 #    (original filenames are kept by default -- no flag needed for that)
-PHOTOS_LIBRARY="${PHOTOS_LIBRARY:-$HOME/Pictures/Photos Library.photoslibrary}"
 if [ ! -d "$PHOTOS_LIBRARY" ]; then
   echo "$LOG_TAG ERROR: Photos library not found at $PHOTOS_LIBRARY."
   echo "$LOG_TAG If your library lives elsewhere, update PHOTOS_LIBRARY in this script."
   exit 1
 fi
-
-init_sync_observability "nas"
-trap 'finish_sync_observability $?' EXIT
 
 # Wrapped in caffeinate so macOS doesn't idle/system-sleep mid-export and
 # drop the SMB mount -- this run can take hours (or longer) on an initial

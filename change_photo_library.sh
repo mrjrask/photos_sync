@@ -11,7 +11,7 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 if [ "$(uname -s)" != "Darwin" ] || ! command -v osascript >/dev/null 2>&1; then
-  echo "change_photo_library requires macOS and Finder." >&2
+  echo "change_photo_library.sh requires macOS and Finder." >&2
   exit 1
 fi
 
@@ -35,15 +35,11 @@ if [ ! -d "$SELECTED" ] || [[ "$SELECTED" != *.photoslibrary ]]; then
   exit 1
 fi
 
-mkdir -p "$(dirname "$CONFIG_FILE")"
-touch "$CONFIG_FILE"
-grep -v '^PHOTOS_LIBRARY=' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" 2>/dev/null || true
-mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
-printf 'PHOTOS_LIBRARY=%q\n' "$SELECTED" >> "$CONFIG_FILE"
-
 # An osxphotos export database belongs to the library it indexed. Preserve but
 # retire existing state when the source actually changes, preventing a new
 # library from inheriting a misleading completed cursor or update database.
+# Archive every state file before changing the configuration so an archival
+# failure leaves subsequent syncs pointed at the previous library.
 if [ -n "$PREVIOUS_LIBRARY" ] && [ "$PREVIOUS_LIBRARY" != "$SELECTED" ]; then
   STAMP="$(date '+%Y%m%d-%H%M%S')"
   for state_dir in \
@@ -60,5 +56,11 @@ if [ -n "$PREVIOUS_LIBRARY" ] && [ "$PREVIOUS_LIBRARY" != "$SELECTED" ]; then
   done
   echo "Previous export tracking state was archived; the new library will receive a full pass."
 fi
+
+mkdir -p "$(dirname "$CONFIG_FILE")"
+grep -v '^PHOTOS_LIBRARY=' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" 2>/dev/null || true
+printf 'PHOTOS_LIBRARY=%q\n' "$SELECTED" >> "$CONFIG_FILE.tmp"
+mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+
 echo "Photos library changed to: $SELECTED"
 echo "The next NAS and local sync runs will use this library."
