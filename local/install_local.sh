@@ -95,10 +95,13 @@ echo "-- 4/6 Copying script to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 if [ "$SCRIPT_SRC_DIR" != "$INSTALL_DIR" ]; then
   cp "$SCRIPT_SRC_DIR/sync_photos_local.sh" "$INSTALL_DIR/"
+  cp "$SCRIPT_SRC_DIR/../sync_support.sh" "$INSTALL_DIR/"
+  cp "$SCRIPT_SRC_DIR/../change_photo_library.sh" "$INSTALL_DIR/"
 else
   echo "   Already running from $INSTALL_DIR; nothing to copy."
 fi
-chmod +x "$INSTALL_DIR/sync_photos_local.sh"
+rm -f "$INSTALL_DIR/change_photo_library"
+chmod +x "$INSTALL_DIR/sync_photos_local.sh" "$INSTALL_DIR/change_photo_library.sh"
 
 echo "-- 5/6 Running first sync now (this can take a while for a large library)"
 echo "   macOS may pop up a permission dialog asking to allow access to your"

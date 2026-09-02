@@ -32,13 +32,14 @@ and can be installed independently of everything above.
   that makes this work is kept on local disk (`~/Library/Application
   Support/photos-nas-sync/export.db`), not on the NAS share, since SQLite's
   file locking isn't reliable over SMB.
-- **Monthly batches:** each invocation first runs an open-ended batch for
-  assets dated before `2005-08`, then exports `2005-08` through the current
-  month with a fresh `osxphotos` process for every capture month. This keeps a
-  535,000+ item library out of one ever-growing process and releases transient
-  memory and file resources between batches. A five-second pause separates
-  monthly batches. An open-ended final batch includes assets dated after the
-  current month.
+- **Bounded yearly batches:** each invocation first runs an open-ended batch
+  for assets dated before `2005-08`, then exports 12 capture months per fresh
+  `osxphotos` process through the current month. This releases transient memory
+  and file resources without paying the very expensive 585,000-item Photos
+  database startup/scan once for every single month. A five-second pause
+  separates batches. An open-ended final batch includes assets dated after the
+  current month. The span is configurable if a particular Mac needs smaller
+  batches.
 - **Schedule:** runs daily at 3:00 AM, plus once whenever you log in.
 - **Tooling:** [osxphotos](https://github.com/RhetTbull/osxphotos) (the
   standard CLI for scripted Photos exports) driven by a macOS launchd agent.
@@ -68,6 +69,8 @@ The repo is split into a `nas/` folder (exports to the cm5 NAS share) and a
 | `nas/sync_photos.sh` | The actual sync: mount check + `osxphotos export` |
 | `nas/com.jason.photosnassync.plist` | launchd agent definition (installed to `~/Library/LaunchAgents/`) |
 | `local/install_local.sh`, `local/uninstall_local.sh`, `local/sync_photos_local.sh`, `local/com.jason.photoslocalsync.plist` | The [local-disk variant](#local-disk-variant) — same idea, no NAS involved |
+| `change_photo_library.sh` | Opens a macOS picker for choosing any `.photoslibrary`, including one on an external drive |
+| `sync_support.sh` | Shared capacity preflight, Desktop health log, and JSON-lines run summaries |
 
 All `.sh` scripts are tracked as executable in this repo, so `./install.sh`
 and `./uninstall.sh` work directly from within their folder; `bash install.sh`
@@ -102,6 +105,32 @@ allow access to your Photos library. Click **Allow** — if you don't, the
 scheduled background runs will fail silently (no GUI dialog can appear when
 launchd runs headless).
 
+### Simplest path when the complete library is already on this Mac
+
+If Photos is set to **Download Originals to this Mac** and the complete library
+is already stored locally, you do **not** need to perform the long manual test
+checklist before starting. The normal installer and sync already automate the
+important checks. Use this shorter path:
+
+1. Connect to `smb://cm5.local/data` once in Finder and save the password in
+   Keychain, as described above.
+2. Run `cd photos_sync/nas && ./install.sh`.
+3. Press Return to accept `/Volumes/data/Photos` unless you want another NAS
+   destination, and click **Allow** if macOS asks for Photos access.
+4. Leave the Mac connected to power with the lid open. Watch only the concise
+   Desktop log if desired:
+   ```bash
+   tail -f ~/Desktop/photos-sync-health.log
+   ```
+
+That is sufficient for the normal case. The installer handles dependencies,
+the first run performs and caches the capacity estimate, batches and resumes
+the migration, and later scheduled runs become single-process incremental
+updates. `--download-missing` remains enabled as a safety net, but when all
+originals are already local it should not initiate a large iCloud download.
+The more detailed verification and troubleshooting commands below are for a
+failure or an unusual setup, not prerequisites.
+
 ### Choosing the destination folder
 
 `install.sh` starts by asking:
@@ -130,6 +159,19 @@ Check the log after a run:
 tail -50 ~/Library/Logs/photos-nas-sync.log
 ```
 
+Read the short, append-only health history maintained on the Desktop:
+```bash
+tail -50 ~/Desktop/photos-sync-health.log
+```
+
+Each completed or failed run also appends a machine-readable JSON object to
+`~/Library/Logs/photos-nas-sync-summary.jsonl` (or
+`photos-local-sync-summary.jsonl`). It includes status, elapsed seconds,
+process and failure counts, capacity figures, and exported/updated/skipped
+counters plus item throughput when the installed osxphotos version prints
+those counters in its normal summary. Unavailable counters and throughput are
+recorded as JSON `null`, never as a misleading zero.
+
 Check files landed on the NAS:
 ```bash
 ls /Volumes/data/Photos/
@@ -157,36 +199,59 @@ launchctl load ~/Library/LaunchAgents/com.jason.photosnassync.plist
 ## Doing a large (e.g. ~1TB) initial migration
 
 The first run exports your entire library and can take many hours. It is
-automatically divided into calendar-month batches beginning with August 2005;
+automatically divided into 12-month batches beginning with August 2005;
 before those batches, an open-ended pre-start batch exports everything dated
-through July 31, 2005. That pre-start check runs on every invocation, so an old
-scan imported later or an asset newly adjusted to an older date is not delayed
-or omitted. Each completed month is recorded locally in `batch-cursor`, beside
-that variant's export database. If the run fails or is stopped, the next launch
-retries the interrupted month rather than returning to the beginning. After a
+through July 31, 2005. It is retried on each initial-migration invocation until
+it succeeds; after migration, the open-ended incremental update covers these
+older dates too. The month after each completed range is recorded locally in
+`batch-cursor`, beside that variant's export database. If the run fails or is stopped, the next launch
+retries the interrupted range rather than returning to the beginning. After a
 full pass through the month that was current when the run started, a final
 open-ended batch exports anything dated in the future (such as an asset from a
 misconfigured camera clock or a manually adjusted date). The cursor uses the
 `future:YYYY-MM-01` marker while that batch runs. The date is the batch's
 original lower boundary and remains unchanged across retries and later
 launches, including when the calendar month rolls over, so an interruption
-cannot create a gap. After it succeeds, the cursor resets to August 2005 for
-the next scheduled run. The existing `--update` database makes later passes
-cheap while still detecting changes to older items. A few things make this go
-smoothly:
+cannot create a gap. After it succeeds, the cursor changes to `complete`.
+Later scheduled runs use one open-ended `--update` process, which detects new
+or changed items at any capture date without restarting osxphotos for every
+historical range. This prevents routine daily syncs from repeating the initial
+migration's setup cost. A few things make this go smoothly:
 
-- **Resource usage is bounded per month.** Each batch uses a completely new
-  `osxphotos` process, so memory and other process resources accumulated by
-  the previous batch are returned to macOS. The wrapper waits five seconds
-  before starting the next month, but continues until caught up.
-- **Changing the starting month or pause:** the library's configured earliest
-  month is `2005-08`. Override it for either script with
+- **Capacity is checked before the initial export.** The script measures the
+  selected Photos library package with `du`, compares it with destination free
+  space, and warns in both the normal and Desktop health logs when there is
+  less than the estimate plus a 10% margin. It remains advisory because an
+  iCloud-optimized library can be smaller than the originals it represents,
+  while previews inside the package can make the package larger than the
+  exported originals. The estimate is cached with the export state, so an
+  interrupted migration and routine incremental runs do not repeat the
+  expensive source scan.
+
+- **Resource usage and rescans are balanced.** Each 12-month batch uses a
+  completely new `osxphotos` process, so accumulated memory is returned to
+  macOS. A process startup must still inspect the Photos database, however;
+  annual ranges reduce those full-library setup passes from roughly 250 to
+  roughly 21 for an August 2005 start. Per-file export and metadata work is
+  unchanged. The wrapper waits five seconds before starting the next range.
+  After that first pass, each daily sync uses only one process.
+- **Verbose per-file logging is off by default.** At hundreds of thousands of
+  files, formatting and writing a line for every item adds substantial I/O and
+  can make the log itself enormous. Set `PHOTOS_VERBOSE=1` only while
+  diagnosing a problem; normal osxphotos progress and batch boundaries remain
+  logged.
+- **Changing the starting month, batch span, or pause:** the library's
+  configured earliest month is `2005-08`. Override it for either script with
   `PHOTOS_BATCH_START=YYYY-MM`. Assets before that month remain covered by the
   open-ended pre-start batch, but choosing a value near the oldest expected
-  asset keeps that catch-all batch small. Set `PHOTOS_BATCH_PAUSE_SECONDS` to
-  change the five-second inter-batch pause. For example:
+  asset keeps that catch-all batch small. `PHOTOS_BATCH_SPAN_MONTHS` controls
+  the number of months per process (default 12); use 6 if memory still grows
+  too high, or 24 if startup scans dominate and memory remains stable. Set
+  `PHOTOS_BATCH_PAUSE_SECONDS` to change the five-second inter-batch pause. For
+  example:
   ```bash
-  PHOTOS_BATCH_START=2005-08 PHOTOS_BATCH_PAUSE_SECONDS=10 \
+  PHOTOS_BATCH_START=2005-08 PHOTOS_BATCH_SPAN_MONTHS=12 \
+    PHOTOS_BATCH_PAUSE_SECONDS=10 \
     ~/photos_sync/sync_photos.sh
   ```
   If you intentionally change the start month during an unfinished pass,
@@ -203,10 +268,13 @@ smoothly:
 - **Watch progress live:** the sync's own output goes entirely to the log
   file, not the terminal running `install.sh`. Open a second terminal and
   run `tail -f ~/Library/Logs/photos-nas-sync.log`.
+- **Watch health at a glance:** `tail -f ~/Desktop/photos-sync-health.log`
+  shows starts, capacity warnings, success/failure, duration, process counts,
+  and any summary counters without the full export chatter.
 - **It's fine if it doesn't finish in one sitting.** The export is incremental
-  (`--update`) and resumable at the current calendar month — if a run is
+  (`--update`) and resumable at the current batch — if a run is
   interrupted (network drop, sleep, reboot), the next run (scheduled at 3 AM,
-  at login, or run manually) retries that month and then continues forward.
+  at login, or run manually) retries that range and then continues forward.
   For ~1TB it may legitimately take more than one day/run to complete.
 - **Check free space first** on both ends: `df -h /Volumes/data` on the NAS
   side (the sync now logs this automatically at the start of each run) and
@@ -218,6 +286,25 @@ smoothly:
   next run, rather than blocking forever.
 
 ## Troubleshooting
+
+### Changing the Photos library
+
+Run the installed picker whenever the source library moves or you want to sync
+a different library:
+
+```bash
+~/photos_sync/change_photo_library.sh
+```
+
+The native macOS selection window shows external disks under **Locations**,
+hides invisible files, and treats a Photos library package as one selectable
+item instead of opening it like an ordinary folder. Canceling makes no change.
+The selected path is validated as a `.photoslibrary` package and saved as
+`PHOTOS_LIBRARY` in `~/Library/Application Support/photos-sync/config`, shared
+by both sync variants. Stop an active sync before changing libraries. Each
+variant's existing `export.db` and `batch-cursor` are automatically moved into
+a timestamped archive when the configured path changes, so the new library
+receives a clean full pass without destroying the old tracking state.
 
 - **A "Python" icon appears in the Dock while a sync is running, and
   right-clicking it always says "Application Not Responding"** — this is

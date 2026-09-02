@@ -11,6 +11,16 @@
 # --update to work correctly across runs).
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUPPORT_SCRIPT="$SCRIPT_DIR/sync_support.sh"
+[ -f "$SUPPORT_SCRIPT" ] || SUPPORT_SCRIPT="$SCRIPT_DIR/../sync_support.sh"
+if [ ! -f "$SUPPORT_SCRIPT" ]; then
+  echo "Missing sync_support.sh; re-run local/install_local.sh." >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$SUPPORT_SCRIPT"
+
 # Destination folder is configurable -- install_local.sh prompts for it and
 # saves the choice to CONFIG_FILE as DEST_ROOT_LOCAL. Falls back to the
 # original default if unset (e.g. an older config, or the script run
@@ -34,7 +44,9 @@ EXPORT_DB_DIR="$HOME/Library/Application Support/photos-local-sync"
 EXPORT_DB="$EXPORT_DB_DIR/export.db"
 BATCH_CURSOR="$EXPORT_DB_DIR/batch-cursor"
 BATCH_START="${PHOTOS_BATCH_START:-2005-08}"
+BATCH_SPAN_MONTHS="${PHOTOS_BATCH_SPAN_MONTHS:-12}"
 BATCH_PAUSE_SECONDS="${PHOTOS_BATCH_PAUSE_SECONDS:-5}"
+PHOTOS_VERBOSE="${PHOTOS_VERBOSE:-0}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -64,8 +76,8 @@ if ! acquire_lock; then
 fi
 trap 'rm -rf "$LOCK_DIR" 2>/dev/null' EXIT
 
-# Rotate the log before this run if it's grown large -- --verbose on a
-# library this size produces a lot of output, and nothing else trims it.
+# Rotate the log before this run if it has grown large (for example, when
+# diagnostic PHOTOS_VERBOSE=1 was enabled); nothing else trims it.
 LOG_MAX_BYTES=$((100 * 1024 * 1024))
 if [ -f "$LOG_FILE" ] && [ "$(stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)" -gt "$LOG_MAX_BYTES" ]; then
   mv -f "$LOG_FILE" "$LOG_FILE.1"
@@ -115,12 +127,15 @@ fi
 # explanation of each flag. The only structural difference from that script
 # is DEST_ROOT being a local folder, so there's no NAS mount step and no
 # run-level retry loop for a dropped network share.
-PHOTOS_LIBRARY="$HOME/Pictures/Photos Library.photoslibrary"
+PHOTOS_LIBRARY="${PHOTOS_LIBRARY:-$HOME/Pictures/Photos Library.photoslibrary}"
 if [ ! -d "$PHOTOS_LIBRARY" ]; then
   echo "$LOG_TAG ERROR: Photos library not found at $PHOTOS_LIBRARY."
   echo "$LOG_TAG If your library lives elsewhere, update PHOTOS_LIBRARY in this script."
   exit 1
 fi
+
+init_sync_observability "local"
+trap 'finish_sync_observability $?' EXIT
 
 # Wrapped in caffeinate so macOS doesn't idle/system-sleep mid-export -- this
 # run can take hours (or longer) on an initial large library. Also wrapped
@@ -130,6 +145,7 @@ fi
 # for the full explanation of both.
 run_export() {
   local from_date="$1" to_date="${2:-}"
+  local output_file status
   local cmd=(
     "$OSXPHOTOS_BIN" export "$DEST_ROOT"
     --library "$PHOTOS_LIBRARY"
@@ -140,8 +156,10 @@ run_export() {
     --retry 3
     --touch-file
     --exiftool
-    --verbose
   )
+  if [ "$PHOTOS_VERBOSE" = "1" ]; then
+    cmd+=(--verbose)
+  fi
   if [ -n "$from_date" ]; then
     cmd+=(--from-date "$from_date")
   fi
@@ -151,11 +169,17 @@ run_export() {
   if command -v taskpolicy >/dev/null 2>&1; then
     cmd=(taskpolicy -b "${cmd[@]}")
   fi
+  output_file="$(mktemp "${TMPDIR:-/tmp}/photos-local-export.XXXXXX")"
   if command -v caffeinate >/dev/null 2>&1; then
-    caffeinate -i -s -m "${cmd[@]}"
+    caffeinate -i -s -m "${cmd[@]}" 2>&1 | tee "$output_file"
+    status="${PIPESTATUS[0]}"
   else
-    "${cmd[@]}"
+    "${cmd[@]}" 2>&1 | tee "$output_file"
+    status="${PIPESTATUS[0]}"
   fi
+  record_export_output "$output_file" "$status"
+  rm -f "$output_file"
+  return "$status"
 }
 
 if ! [[ "$BATCH_START" =~ ^[0-9]{4}-(0[1-9]|1[0-2])$ ]]; then
@@ -166,9 +190,21 @@ if ! [[ "$BATCH_PAUSE_SECONDS" =~ ^[0-9]+$ ]]; then
   echo "$LOG_TAG ERROR: PHOTOS_BATCH_PAUSE_SECONDS must be a non-negative integer (got: $BATCH_PAUSE_SECONDS)."
   exit 1
 fi
+if ! [[ "$BATCH_SPAN_MONTHS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "$LOG_TAG ERROR: PHOTOS_BATCH_SPAN_MONTHS must be a positive integer (got: $BATCH_SPAN_MONTHS)."
+  exit 1
+fi
+if [ "$PHOTOS_VERBOSE" != "0" ] && [ "$PHOTOS_VERBOSE" != "1" ]; then
+  echo "$LOG_TAG ERROR: PHOTOS_VERBOSE must be 0 or 1 (got: $PHOTOS_VERBOSE)."
+  exit 1
+fi
 
 next_month() {
   date -j -f "%Y-%m-%d" "$1-01" -v+1m "+%Y-%m"
+}
+
+add_months() {
+  date -j -f "%Y-%m-%d" "$1-01" -v+"$2"m "+%Y-%m"
 }
 
 month_end() {
@@ -179,12 +215,12 @@ previous_day() {
   date -j -f "%Y-%m-%d" "$1" -v-1d "+%Y-%m-%d"
 }
 
-# Run each calendar month in a new osxphotos process. This bounds the amount
-# of work and transient memory retained by any one process. The cursor is
-# advanced atomically only after a successful month, so an interruption
-# resumes that month on the next launch. Once a complete pass reaches the
-# month that was current at run start, reset the cursor for the next run;
-# this allows --update to discover edits or newly imported older photos.
+# Run each bounded range in a new osxphotos process. This balances transient
+# memory against the full-library setup cost paid by every new process. The
+# cursor is advanced atomically only after a successful range, so an
+# interruption resumes that range on the next launch. Once a complete pass
+# reaches the month that was current at run start, later launches switch to a
+# single open-ended update that discovers edits and newly imported old photos.
 run_end_month="$(date '+%Y-%m')"
 if [[ "$BATCH_START" > "$run_end_month" ]]; then
   echo "$LOG_TAG ERROR: PHOTOS_BATCH_START ($BATCH_START) cannot be later than the current month ($run_end_month)."
@@ -192,9 +228,12 @@ if [[ "$BATCH_START" > "$run_end_month" ]]; then
 fi
 batch_month="$BATCH_START"
 future_from=""
+full_pass_complete=false
 if [ -f "$BATCH_CURSOR" ]; then
   saved_cursor="$(cat "$BATCH_CURSOR")"
-  if [[ "$saved_cursor" =~ ^future:([0-9]{4}-(0[1-9]|1[0-2])-01)$ ]]; then
+  if [ "$saved_cursor" = "complete" ]; then
+    full_pass_complete=true
+  elif [[ "$saved_cursor" =~ ^future:([0-9]{4}-(0[1-9]|1[0-2])-01)$ ]]; then
     batch_month="future"
     future_from="${BASH_REMATCH[1]}"
   elif [ "$saved_cursor" = "future" ]; then
@@ -209,6 +248,30 @@ if [ -f "$BATCH_CURSOR" ]; then
   else
     echo "$LOG_TAG Ignoring invalid batch cursor: $saved_cursor"
   fi
+fi
+
+if [ "$full_pass_complete" != true ]; then
+  preflight_capacity
+else
+  DEST_AVAILABLE_KB="$(df -Pk "$DEST_ROOT" 2>/dev/null | awk 'NR==2 {print $4}')"
+  DEST_AVAILABLE_KB="${DEST_AVAILABLE_KB:-0}"
+  health_note "INCREMENTAL_PREFLIGHT available=${DEST_AVAILABLE_KB}KiB"
+fi
+
+# After the initial historical pass, one open-ended --update invocation catches
+# new and changed assets at any capture date without rescanning once per range.
+if [ "$full_pass_complete" = true ]; then
+  echo "$LOG_TAG Initial historical pass is complete; starting single incremental update."
+  set +e
+  run_export ""
+  status=$?
+  set -e
+  if [ "$status" -ne 0 ]; then
+    echo "$LOG_TAG Incremental update failed (exit $status) -- will retry at the next scheduled sync."
+    exit "$status"
+  fi
+  echo "===== $(date '+%Y-%m-%d %H:%M:%S') $LOG_TAG run end ====="
+  exit 0
 fi
 
 # Always begin with an open-ended pre-start batch. This catches scans, bad
@@ -230,20 +293,24 @@ echo "$LOG_TAG Completed pre-start batch."
 
 while [ "$batch_month" != "future" ] && [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month" ]]; do
   from_date="$batch_month-01"
-  to_date="$(month_end "$batch_month")"
-  echo "$LOG_TAG Starting batch $batch_month ($from_date through $to_date)."
+  batch_end_month="$(add_months "$batch_month" "$((BATCH_SPAN_MONTHS - 1))")"
+  if [[ "$batch_end_month" > "$run_end_month" ]]; then
+    batch_end_month="$run_end_month"
+  fi
+  to_date="$(month_end "$batch_end_month")"
+  echo "$LOG_TAG Starting batch $batch_month through $batch_end_month ($from_date through $to_date)."
   set +e
   run_export "$from_date" "$to_date"
   status=$?
   set -e
   if [ "$status" -ne 0 ]; then
-    echo "$LOG_TAG Batch $batch_month failed (exit $status) -- will resume this month at the next scheduled sync."
+    echo "$LOG_TAG Batch $batch_month through $batch_end_month failed (exit $status) -- will resume this range at the next scheduled sync."
     exit "$status"
   fi
-  following_month="$(next_month "$batch_month")"
+  following_month="$(next_month "$batch_end_month")"
   printf '%s\n' "$following_month" > "$BATCH_CURSOR.tmp"
   mv -f "$BATCH_CURSOR.tmp" "$BATCH_CURSOR"
-  echo "$LOG_TAG Completed batch $batch_month; next batch is $following_month."
+  echo "$LOG_TAG Completed batch $batch_month through $batch_end_month; next batch is $following_month."
   batch_month="$following_month"
   if [[ "$batch_month" < "$run_end_month" || "$batch_month" == "$run_end_month" ]]; then
     sleep "$BATCH_PAUSE_SECONDS"
@@ -270,8 +337,8 @@ if [ "$status" -ne 0 ]; then
 fi
 echo "$LOG_TAG Completed future-dated batch."
 
-printf '%s\n' "$BATCH_START" > "$BATCH_CURSOR.tmp"
+printf '%s\n' "complete" > "$BATCH_CURSOR.tmp"
 mv -f "$BATCH_CURSOR.tmp" "$BATCH_CURSOR"
-echo "$LOG_TAG Completed full pass through $run_end_month; cursor reset to $BATCH_START for the next run."
+echo "$LOG_TAG Completed full pass through $run_end_month; future runs will use one incremental update."
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') $LOG_TAG run end ====="
