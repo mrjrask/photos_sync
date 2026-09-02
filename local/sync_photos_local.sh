@@ -32,6 +32,7 @@ if [ -f "$CONFIG_FILE" ]; then
   source "$CONFIG_FILE"
 fi
 DEST_ROOT="${PHOTOS_LOCAL_DEST:-${DEST_ROOT_LOCAL:-$HOME/Pictures/PhotosBackup}}"
+PHOTOS_LIBRARY="${PHOTOS_LIBRARY:-$HOME/Pictures/Photos Library.photoslibrary}"
 
 LOG_FILE="$HOME/Library/Logs/photos-local-sync.log"
 LOG_TAG="[photos-local-sync]"
@@ -87,6 +88,11 @@ exec >> "$LOG_FILE" 2>&1
 
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') $LOG_TAG run start ====="
 
+# Start reporting before any destination, tool, or library preflight so failed
+# runs are represented in both the health log and JSON summary.
+init_sync_observability "local"
+trap 'finish_sync_observability $?' EXIT
+
 if ! mkdir -p "$DEST_ROOT"; then
   echo "$LOG_TAG ERROR: could not create $DEST_ROOT."
   exit 1
@@ -127,15 +133,11 @@ fi
 # explanation of each flag. The only structural difference from that script
 # is DEST_ROOT being a local folder, so there's no NAS mount step and no
 # run-level retry loop for a dropped network share.
-PHOTOS_LIBRARY="${PHOTOS_LIBRARY:-$HOME/Pictures/Photos Library.photoslibrary}"
 if [ ! -d "$PHOTOS_LIBRARY" ]; then
   echo "$LOG_TAG ERROR: Photos library not found at $PHOTOS_LIBRARY."
   echo "$LOG_TAG If your library lives elsewhere, update PHOTOS_LIBRARY in this script."
   exit 1
 fi
-
-init_sync_observability "local"
-trap 'finish_sync_observability $?' EXIT
 
 # Wrapped in caffeinate so macOS doesn't idle/system-sleep mid-export -- this
 # run can take hours (or longer) on an initial large library. Also wrapped
@@ -253,7 +255,9 @@ fi
 if [ "$full_pass_complete" != true ]; then
   preflight_capacity
 else
-  DEST_AVAILABLE_KB="$(df -Pk "$DEST_ROOT" 2>/dev/null | awk 'NR==2 {print $4}')"
+  if ! DEST_AVAILABLE_KB="$(df -Pk "$DEST_ROOT" 2>/dev/null | awk 'NR==2 {print $4}')"; then
+    DEST_AVAILABLE_KB=""
+  fi
   DEST_AVAILABLE_KB="${DEST_AVAILABLE_KB:-0}"
   health_note "INCREMENTAL_PREFLIGHT available=${DEST_AVAILABLE_KB}KiB"
 fi

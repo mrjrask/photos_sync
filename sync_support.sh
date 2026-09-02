@@ -99,10 +99,12 @@ finish_sync_observability() {
   else
     throughput=null
   fi
-  printf '{"timestamp":"%s","variant":"%s","status":"%s","elapsed_seconds":%d,"export_processes":%d,"failed_processes":%d,"exported":%s,"updated":%s,"skipped":%s,"throughput_items_per_second":%s,"source_size_kb":%d,"destination_available_kb":%d}\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$SYNC_VARIANT" "$result" "$elapsed" \
-    "$RUN_EXPORT_PROCESSES" "$RUN_FAILED_PROCESSES" "$exported" "$updated" "$skipped" "$throughput" \
-    "$SOURCE_SIZE_KB" "$DEST_AVAILABLE_KB" >> "$SUMMARY_LOG"
+  # Summary reporting is auxiliary. Do not let an unwritable log mask a
+  # successful export or interrupt the remaining EXIT-trap cleanup.
+  { printf '{"timestamp":"%s","variant":"%s","status":"%s","elapsed_seconds":%d,"export_processes":%d,"failed_processes":%d,"exported":%s,"updated":%s,"skipped":%s,"throughput_items_per_second":%s,"source_size_kb":%d,"destination_available_kb":%d}\n' \
+      "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$SYNC_VARIANT" "$result" "$elapsed" \
+      "$RUN_EXPORT_PROCESSES" "$RUN_FAILED_PROCESSES" "$exported" "$updated" "$skipped" "$throughput" \
+      "$SOURCE_SIZE_KB" "$DEST_AVAILABLE_KB" >> "$SUMMARY_LOG"; } 2>/dev/null || true
   health_note "END status=$result elapsed=${elapsed}s export_processes=$RUN_EXPORT_PROCESSES failed_processes=$RUN_FAILED_PROCESSES exported=$exported updated=$updated skipped=$skipped"
   rm -rf "$LOCK_DIR" 2>/dev/null || true
 }

@@ -319,7 +319,9 @@ fi
 if [ "$full_pass_complete" != true ]; then
   preflight_capacity
 else
-  DEST_AVAILABLE_KB="$(df -Pk "$DEST_ROOT" 2>/dev/null | awk 'NR==2 {print $4}')"
+  if ! DEST_AVAILABLE_KB="$(df -Pk "$DEST_ROOT" 2>/dev/null | awk 'NR==2 {print $4}')"; then
+    DEST_AVAILABLE_KB=""
+  fi
   DEST_AVAILABLE_KB="${DEST_AVAILABLE_KB:-0}"
   health_note "INCREMENTAL_PREFLIGHT available=${DEST_AVAILABLE_KB}KiB"
 fi
