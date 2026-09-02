@@ -23,6 +23,7 @@ LOG_FILES=(
   "$HOME/Library/Logs/photos-nas-sync.log"
   "$HOME/Library/Logs/photos-nas-sync.out.log"
   "$HOME/Library/Logs/photos-nas-sync.err.log"
+  "$HOME/Library/Logs/photos-nas-sync-summary.jsonl"
 )
 
 REMOVE_LOGS=false
@@ -49,6 +50,9 @@ fi
 echo "-- 2/4 Removing installed scripts"
 if [ -d "$INSTALL_DIR" ]; then
   rm -f "$INSTALL_DIR/sync_photos.sh" "$INSTALL_DIR/mount_nas_share.sh"
+  if [ ! -f "$INSTALL_DIR/sync_photos_local.sh" ]; then
+    rm -f "$INSTALL_DIR/sync_support.sh" "$INSTALL_DIR/change_photo_library"
+  fi
   rmdir "$INSTALL_DIR" 2>/dev/null || true
   echo "   Removed sync_photos.sh and mount_nas_share.sh from $INSTALL_DIR"
   if [ -d "$INSTALL_DIR" ]; then
@@ -64,6 +68,9 @@ if [ "$REMOVE_LOGS" = true ]; then
   for f in "${LOG_FILES[@]}"; do
     rm -f "$f"
   done
+  if [ ! -f "$HOME/Library/LaunchAgents/com.jason.photoslocalsync.plist" ]; then
+    rm -f "$HOME/Desktop/photos-sync-health.log"
+  fi
   echo "   Removed log files"
 else
   echo "   Left log files in place (re-run with --remove-logs to delete them)"

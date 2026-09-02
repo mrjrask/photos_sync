@@ -71,10 +71,13 @@ mkdir -p "$INSTALL_DIR"
 if [ "$SCRIPT_SRC_DIR" != "$INSTALL_DIR" ]; then
   cp "$SCRIPT_SRC_DIR/sync_photos.sh" "$INSTALL_DIR/"
   cp "$SCRIPT_SRC_DIR/mount_nas_share.sh" "$INSTALL_DIR/"
+  cp "$SCRIPT_SRC_DIR/../sync_support.sh" "$INSTALL_DIR/"
+  cp "$SCRIPT_SRC_DIR/../change_photo_library" "$INSTALL_DIR/"
 else
   echo "   Already running from $INSTALL_DIR; nothing to copy."
 fi
-chmod +x "$INSTALL_DIR/sync_photos.sh" "$INSTALL_DIR/mount_nas_share.sh"
+chmod +x "$INSTALL_DIR/sync_photos.sh" "$INSTALL_DIR/mount_nas_share.sh" \
+  "$INSTALL_DIR/change_photo_library"
 
 echo "-- 5/7 Running first sync now (this can take a while for a large library)"
 echo "   macOS may pop up a permission dialog asking to allow access to your"
