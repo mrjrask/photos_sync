@@ -52,7 +52,8 @@ echo "-- 2/4 Removing installed script"
 if [ -d "$INSTALL_DIR" ]; then
   rm -f "$INSTALL_DIR/sync_photos_local.sh"
   if [ ! -f "$INSTALL_DIR/sync_photos.sh" ]; then
-    rm -f "$INSTALL_DIR/sync_support.sh" "$INSTALL_DIR/change_photo_library"
+    rm -f "$INSTALL_DIR/sync_support.sh" "$INSTALL_DIR/change_photo_library" \
+      "$INSTALL_DIR/change_photo_library.sh"
   fi
   rmdir "$INSTALL_DIR" 2>/dev/null || true
   echo "   Removed sync_photos_local.sh from $INSTALL_DIR"

@@ -69,7 +69,7 @@ The repo is split into a `nas/` folder (exports to the cm5 NAS share) and a
 | `nas/sync_photos.sh` | The actual sync: mount check + `osxphotos export` |
 | `nas/com.jason.photosnassync.plist` | launchd agent definition (installed to `~/Library/LaunchAgents/`) |
 | `local/install_local.sh`, `local/uninstall_local.sh`, `local/sync_photos_local.sh`, `local/com.jason.photoslocalsync.plist` | The [local-disk variant](#local-disk-variant) — same idea, no NAS involved |
-| `change_photo_library` | Opens a macOS picker for choosing any `.photoslibrary`, including one on an external drive |
+| `change_photo_library.sh` | Opens a macOS picker for choosing any `.photoslibrary`, including one on an external drive |
 | `sync_support.sh` | Shared capacity preflight, Desktop health log, and JSON-lines run summaries |
 
 All `.sh` scripts are tracked as executable in this repo, so `./install.sh`
@@ -293,7 +293,7 @@ Run the installed picker whenever the source library moves or you want to sync
 a different library:
 
 ```bash
-~/photos_sync/change_photo_library
+~/photos_sync/change_photo_library.sh
 ```
 
 The native macOS selection window shows external disks under **Locations**,

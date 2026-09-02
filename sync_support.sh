@@ -16,13 +16,15 @@ init_sync_observability() {
   RUN_SKIPPED_FOUND=false
   SOURCE_SIZE_KB=0
   DEST_AVAILABLE_KB=0
-  mkdir -p "$HOME/Desktop" "$(dirname "$SUMMARY_LOG")"
-  printf '%s [%s] START library=%s destination=%s\n' \
-    "$(date '+%Y-%m-%d %H:%M:%S')" "$SYNC_VARIANT" "$PHOTOS_LIBRARY" "$DEST_ROOT" >> "$HEALTH_LOG"
+  mkdir -p "$(dirname "$SUMMARY_LOG")"
+  mkdir -p "$HOME/Desktop" 2>/dev/null || true
+  health_note "START library=$PHOTOS_LIBRARY destination=$DEST_ROOT"
 }
 
 health_note() {
-  printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$SYNC_VARIANT" "$*" >> "$HEALTH_LOG"
+  # The Desktop log is auxiliary. A protected, redirected, or otherwise
+  # unavailable Desktop must not prevent the synchronization from running.
+  { printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$SYNC_VARIANT" "$*" >> "$HEALTH_LOG"; } 2>/dev/null || true
 }
 
 preflight_capacity() {
@@ -33,13 +35,17 @@ preflight_capacity() {
     health_note "PREFLIGHT using cached source estimate=${SOURCE_SIZE_KB}KiB"
   else
     health_note "PREFLIGHT estimating source size; this can take several minutes for a large library"
-    SOURCE_SIZE_KB="$(du -sk "$PHOTOS_LIBRARY" 2>/dev/null | awk 'NR==1 {print $1}')"
+    if ! SOURCE_SIZE_KB="$(du -sk "$PHOTOS_LIBRARY" 2>/dev/null | awk 'NR==1 {print $1}')"; then
+      SOURCE_SIZE_KB=""
+    fi
     if [[ "${SOURCE_SIZE_KB:-}" =~ ^[0-9]+$ ]] && [ "$SOURCE_SIZE_KB" -gt 0 ]; then
       printf '%s\n' "$SOURCE_SIZE_KB" > "$size_cache.tmp"
       mv -f "$size_cache.tmp" "$size_cache"
     fi
   fi
-  DEST_AVAILABLE_KB="$(df -Pk "$DEST_ROOT" 2>/dev/null | awk 'NR==2 {print $4}')"
+  if ! DEST_AVAILABLE_KB="$(df -Pk "$DEST_ROOT" 2>/dev/null | awk 'NR==2 {print $4}')"; then
+    DEST_AVAILABLE_KB=""
+  fi
   SOURCE_SIZE_KB="${SOURCE_SIZE_KB:-0}"
   DEST_AVAILABLE_KB="${DEST_AVAILABLE_KB:-0}"
   required_with_margin=$((SOURCE_SIZE_KB + SOURCE_SIZE_KB / 10))

@@ -10,4 +10,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck nas/*.sh local/*.sh sync_support.sh change_photo_library
+      - run: shellcheck nas/*.sh local/*.sh sync_support.sh change_photo_library.sh
