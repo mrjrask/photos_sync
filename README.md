@@ -105,6 +105,32 @@ allow access to your Photos library. Click **Allow** — if you don't, the
 scheduled background runs will fail silently (no GUI dialog can appear when
 launchd runs headless).
 
+### Simplest path when the complete library is already on this Mac
+
+If Photos is set to **Download Originals to this Mac** and the complete library
+is already stored locally, you do **not** need to perform the long manual test
+checklist before starting. The normal installer and sync already automate the
+important checks. Use this shorter path:
+
+1. Connect to `smb://cm5.local/data` once in Finder and save the password in
+   Keychain, as described above.
+2. Run `cd photos_sync/nas && ./install.sh`.
+3. Press Return to accept `/Volumes/data/Photos` unless you want another NAS
+   destination, and click **Allow** if macOS asks for Photos access.
+4. Leave the Mac connected to power with the lid open. Watch only the concise
+   Desktop log if desired:
+   ```bash
+   tail -f ~/Desktop/photos-sync-health.log
+   ```
+
+That is sufficient for the normal case. The installer handles dependencies,
+the first run performs and caches the capacity estimate, batches and resumes
+the migration, and later scheduled runs become single-process incremental
+updates. `--download-missing` remains enabled as a safety net, but when all
+originals are already local it should not initiate a large iCloud download.
+The more detailed verification and troubleshooting commands below are for a
+failure or an unusual setup, not prerequisites.
+
 ### Choosing the destination folder
 
 `install.sh` starts by asking:
